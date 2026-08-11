@@ -12,7 +12,6 @@ from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.core.sched.request_queue import create_request_queue
 from vllm.v1.core.sched.scheduler import Scheduler as VLLMScheduler
 from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs
-from vllm.v1.metrics.perf import PerfStats
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus, StreamingUpdate
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
@@ -218,6 +217,45 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         if stop_after_transfer and req_id in self.requests_needing_kv_transfer:
             self.pending_stop_after_extraction.add(req_id)
 
+    def _emit_kv_extraction_acknowledgements(
+        self,
+        extracted_request_ids: Iterable[str],
+        outputs: dict[int, list[EngineCoreOutput]],
+    ) -> None:
+        """Emit ``kv_ready`` while extracted requests are still scheduler-owned."""
+        for request_id in extracted_request_ids:
+            try:
+                self.active_kv_transfers.discard(request_id)
+                request = self.requests.get(request_id)
+                if request is not None and not request.is_finished():
+                    outputs[request.client_index].append(
+                        OmniEngineCoreOutput(
+                            request_id=request_id,
+                            new_token_ids=[],
+                            kv_transfer_params={"kv_ready": True},
+                        )
+                    )
+            except Exception:
+                logger.exception("Failed to pre-process KV extraction for %s", request_id)
+
+    def _release_extracted_kv_requests(self, extracted_request_ids: Iterable[str]) -> None:
+        """Free delayed KV blocks only after the extraction acknowledgement."""
+        for request_id in extracted_request_ids:
+            try:
+                if request_id not in self.waiting_for_transfer_free:
+                    continue
+                request = self.requests.get(request_id)
+                if request:
+                    self.kv_cache_manager.free(request)
+                    self.requests.pop(request_id, None)
+                    self.transfer_triggered_requests.discard(request_id)
+                    self.active_kv_transfers.discard(request_id)
+                    self.pending_stop_after_extraction.discard(request_id)
+                    logger.debug("Freed blocks for %s after transfer extraction", request_id)
+                self.waiting_for_transfer_free.remove(request_id)
+            except Exception:
+                logger.exception("Failed to free blocks for %s after transfer", request_id)
+
     def schedule(self, throttle_prefills: bool = False) -> SchedulerOutput:
         # Remove FINISHED_ABORTED requests before the upstream scheduler sees
         # them. Upstream vllm raises RuntimeError on this status; omni allows
@@ -272,42 +310,20 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         kv_connector_output = model_runner_output.kv_connector_output
         cudagraph_stats: CUDAGraphStat | None = model_runner_output.cudagraph_stats
 
-        perf_stats: PerfStats | None = None
-        if self.perf_metrics and self.perf_metrics.is_enabled():
-            perf_stats = self.perf_metrics.get_step_perf_stats_per_gpu(scheduler_output)
+        perf_stats = OmniSchedulerMixin._take_step_perf_stats(self, scheduler_output)
 
         outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
         spec_decoding_stats: SpecDecodingStats | None = None
 
-        failed_kv_load_req_ids = None
-        if kv_connector_output and kv_connector_output.invalid_block_ids:
-            # These blocks contain externally computed tokens that failed to
-            # load. Identify affected requests and adjust their computed token
-            # count to trigger recomputation of the invalid blocks.
-            failed_kv_load_req_ids = self._handle_invalid_blocks(
-                kv_connector_output.invalid_block_ids,
-                num_scheduled_tokens,
-            )
+        failed_kv_load_req_ids = OmniSchedulerMixin._get_failed_kv_load_request_ids(
+            self,
+            kv_connector_output,
+            num_scheduled_tokens,
+        )
 
-        # Pre-process KV extraction acks so that the per-request loop below
-        # can see up-to-date active_kv_transfers state and emit kv_ready
-        # signals while requests are still alive (before any deferred stop).
         kv_extracted_ids = getattr(model_runner_output, "kv_extracted_req_ids", None)
         if kv_extracted_ids:
-            for req_id in kv_extracted_ids:
-                try:
-                    self.active_kv_transfers.discard(req_id)
-                    req = self.requests.get(req_id)
-                    if req is not None and not req.is_finished():
-                        outputs[req.client_index].append(
-                            OmniEngineCoreOutput(
-                                request_id=req_id,
-                                new_token_ids=[],
-                                kv_transfer_params={"kv_ready": True},
-                            )
-                        )
-                except Exception:
-                    init_logger(__name__).exception("Failed to pre-process KV extraction for %s", req_id)
+            self._emit_kv_extraction_acknowledgements(kv_extracted_ids, outputs)
 
         # NOTE(woosuk): As len(num_scheduled_tokens) can be up to 1K or more,
         # the below loop can be a performance bottleneck. We should do our best
@@ -567,44 +583,19 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         kv_connector_stats = self._aggregate_kv_connector_stats(kv_connector_output)
         self._publish_kv_cache_events()
 
-        # Create EngineCoreOutputs for all clients that have requests with
-        # outputs in this step.
-        engine_core_outputs = {client_index: EngineCoreOutputs(outputs=outs) for client_index, outs in outputs.items()}
-
-        self._attach_finished_request_sets(
-            engine_core_outputs,
+        engine_core_outputs = OmniSchedulerMixin._assemble_engine_core_outputs(
+            self,
+            outputs,
             synthesize_abort_outputs=True,
+            spec_decoding_stats=spec_decoding_stats,
+            kv_connector_stats=kv_connector_stats,
+            cudagraph_stats=cudagraph_stats,
+            perf_stats=perf_stats,
+            model_runner_output=model_runner_output,
         )
 
-        self._attach_scheduler_stats(
-            engine_core_outputs,
-            spec_decoding_stats,
-            kv_connector_stats,
-            cudagraph_stats,
-            perf_stats,
-        )
-
-        self._capture_omni_connector_output(model_runner_output)
-
-        # Free blocks that were held for transfer (kv_ready and
-        # active_kv_transfers updates already done before the per-request loop).
         if kv_extracted_ids:
-            for req_id in kv_extracted_ids:
-                try:
-                    if req_id in self.waiting_for_transfer_free:
-                        req = self.requests.get(req_id)
-                        if req:
-                            self.kv_cache_manager.free(req)
-                            if req_id in self.requests:
-                                del self.requests[req_id]
-                            if req_id in self.transfer_triggered_requests:
-                                self.transfer_triggered_requests.remove(req_id)
-                            self.active_kv_transfers.discard(req_id)
-                            self.pending_stop_after_extraction.discard(req_id)
-                            logger.debug(f"Freed blocks for {req_id} after transfer extraction")
-                        self.waiting_for_transfer_free.remove(req_id)
-                except Exception:
-                    init_logger(__name__).exception("Failed to free blocks for %s after transfer", req_id)
+            self._release_extracted_kv_requests(kv_extracted_ids)
 
         return engine_core_outputs
 

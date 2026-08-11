@@ -227,6 +227,53 @@ class OmniSchedulerMixin:
             return
         self._latest_omni_connector_output = omni_output
 
+    def _take_step_perf_stats(self, scheduler_output: SchedulerOutput) -> PerfStats | None:
+        """Collect per-step performance stats when the metrics collector is active."""
+        if self.perf_metrics and self.perf_metrics.is_enabled():
+            return self.perf_metrics.get_step_perf_stats_per_gpu(scheduler_output)
+        return None
+
+    def _get_failed_kv_load_request_ids(
+        self,
+        kv_connector_output: Any,
+        num_scheduled_tokens: dict[str, int],
+    ) -> set[str] | None:
+        """Rewind requests whose externally loaded KV blocks are invalid."""
+        invalid_block_ids = getattr(kv_connector_output, "invalid_block_ids", None)
+        if not invalid_block_ids:
+            return None
+        return self._handle_invalid_blocks(invalid_block_ids, num_scheduled_tokens)
+
+    def _assemble_engine_core_outputs(
+        self,
+        outputs: dict[int, list[EngineCoreOutput]],
+        *,
+        synthesize_abort_outputs: bool,
+        spec_decoding_stats: SpecDecodingStats | None,
+        kv_connector_stats: KVConnectorStats | None,
+        cudagraph_stats: CUDAGraphStat | None,
+        perf_stats: PerfStats | None,
+        model_runner_output: Any,
+    ) -> dict[int, EngineCoreOutputs]:
+        """Attach completion metadata and scheduler stats to collected outputs."""
+        engine_core_outputs = {
+            client_index: EngineCoreOutputs(outputs=client_outputs)
+            for client_index, client_outputs in outputs.items()
+        }
+        self._attach_finished_request_sets(
+            engine_core_outputs,
+            synthesize_abort_outputs=synthesize_abort_outputs,
+        )
+        self._attach_scheduler_stats(
+            engine_core_outputs,
+            spec_decoding_stats,
+            kv_connector_stats,
+            cudagraph_stats,
+            perf_stats,
+        )
+        self._capture_omni_connector_output(model_runner_output)
+        return engine_core_outputs
+
     def _wrap_omni_scheduler_output(
         self,
         base: SchedulerOutput,

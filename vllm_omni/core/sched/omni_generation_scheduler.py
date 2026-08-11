@@ -16,7 +16,6 @@ from vllm.v1.engine import (
     EngineCoreOutput,
     EngineCoreOutputs,
 )
-from vllm.v1.metrics.perf import PerfStats
 from vllm.v1.request import Request, RequestStatus, StreamingUpdate
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 
@@ -328,6 +327,40 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
         finally:
             self._free_input_coordinator_request(request.request_id)
 
+    def _finish_pending_chunk_requests(
+        self,
+        outputs: dict[int, list[EngineCoreOutput]],
+        stopped_running_reqs: set[Request],
+    ) -> None:
+        """Finish empty terminal async-chunk inputs collected by ``schedule()``."""
+        for request in self._pending_finish_reqs:
+            if request in stopped_running_reqs or request.is_finished():
+                continue
+            request.status = RequestStatus.FINISHED_STOPPED
+            finish_reason = request.get_finished_reason()
+            finished = self._handle_stopped_request(request)
+            is_segment_finished = not finished
+            kv_transfer_params = None
+            if finished:
+                kv_transfer_params, _ = self._free_request(request)
+                if self.chunk_transfer_adapter is not None:
+                    self.chunk_transfer_adapter.cleanup(
+                        request.request_id,
+                        getattr(request, "external_req_id", None),
+                    )
+            OmniSchedulerMixin._append_request_output(
+                self,
+                outputs,
+                request,
+                new_token_ids=[],
+                finish_reason=finish_reason,
+                stop_reason=request.stop_reason,
+                kv_transfer_params=kv_transfer_params,
+                is_segment_finished=is_segment_finished,
+            )
+            stopped_running_reqs.add(request)
+        self._pending_finish_reqs.clear()
+
     def update_from_output(
         self,
         scheduler_output: SchedulerOutput,
@@ -344,19 +377,16 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
         kv_connector_output = model_runner_output.kv_connector_output
 
         cudagraph_stats: CUDAGraphStat | None = model_runner_output.cudagraph_stats
-        perf_stats: PerfStats | None = None
-        if self.perf_metrics and self.perf_metrics.is_enabled():
-            perf_stats = self.perf_metrics.get_step_perf_stats_per_gpu(scheduler_output)
+        perf_stats = OmniSchedulerMixin._take_step_perf_stats(self, scheduler_output)
 
         outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
         spec_decoding_stats: SpecDecodingStats | None = None
 
-        failed_kv_load_req_ids = None
-        if kv_connector_output and getattr(kv_connector_output, "invalid_block_ids", None):
-            failed_kv_load_req_ids = self._handle_invalid_blocks(
-                kv_connector_output.invalid_block_ids,
-                num_scheduled_tokens,
-            )
+        failed_kv_load_req_ids = OmniSchedulerMixin._get_failed_kv_load_request_ids(
+            self,
+            kv_connector_output,
+            num_scheduled_tokens,
+        )
 
         # NOTE(woosuk): As len(num_scheduled_tokens) can be up to 1K or more,
         # the below loop can be a performance bottleneck. We should do our best
@@ -521,35 +551,7 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
                 # Invariant: EngineCore returns no partial prefill outputs.
                 assert not prompt_logprobs_tensors
 
-        # Finish async_chunk requests that schedule() collected because their
-        # upstream completed with no remaining codec tokens.
-        for request in self._pending_finish_reqs:
-            if request in stopped_running_reqs or request.is_finished():
-                continue
-            request.status = RequestStatus.FINISHED_STOPPED
-            finish_reason = request.get_finished_reason()
-            finished = self._handle_stopped_request(request)
-            is_segment_finished = not finished
-            kv_transfer_params = None
-            if finished:
-                kv_transfer_params, _ = self._free_request(request)
-                if self.chunk_transfer_adapter is not None:
-                    self.chunk_transfer_adapter.cleanup(
-                        request.request_id,
-                        getattr(request, "external_req_id", None),
-                    )
-            OmniSchedulerMixin._append_request_output(
-                self,
-                outputs,
-                request,
-                new_token_ids=[],
-                finish_reason=finish_reason,
-                stop_reason=request.stop_reason,
-                kv_transfer_params=kv_transfer_params,
-                is_segment_finished=is_segment_finished,
-            )
-            stopped_running_reqs.add(request)
-        self._pending_finish_reqs.clear()
+        self._finish_pending_chunk_requests(outputs, stopped_running_reqs)
 
         self._remove_stopped_requests_from_queues(
             stopped_running_reqs,
@@ -574,24 +576,16 @@ class OmniGenerationScheduler(OmniSchedulerMixin, VLLMScheduler):
         kv_connector_stats = self._aggregate_kv_connector_stats(kv_connector_output)
         self._publish_kv_cache_events()
 
-        # Create EngineCoreOutputs for all clients that have requests with
-        # outputs in this step.
-        engine_core_outputs = {client_index: EngineCoreOutputs(outputs=outs) for client_index, outs in outputs.items()}
-
-        self._attach_finished_request_sets(
-            engine_core_outputs,
+        engine_core_outputs = OmniSchedulerMixin._assemble_engine_core_outputs(
+            self,
+            outputs,
             synthesize_abort_outputs=False,
+            spec_decoding_stats=spec_decoding_stats,
+            kv_connector_stats=kv_connector_stats,
+            cudagraph_stats=cudagraph_stats,
+            perf_stats=perf_stats,
+            model_runner_output=model_runner_output,
         )
-
-        self._attach_scheduler_stats(
-            engine_core_outputs,
-            spec_decoding_stats,
-            kv_connector_stats,
-            cudagraph_stats,
-            perf_stats,
-        )
-
-        self._capture_omni_connector_output(model_runner_output)
 
         return engine_core_outputs
 

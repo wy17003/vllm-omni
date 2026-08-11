@@ -88,3 +88,38 @@ def test_output_helper_preserves_required_nan_counter_default():
     output = scheduler._make_omni_engine_output(request, new_token_ids=[])
 
     assert output.num_nans_in_logits == 0
+
+
+def test_update_helpers_skip_disabled_metrics_and_missing_kv_failures():
+    scheduler = _Scheduler()
+    scheduler.perf_metrics = SimpleNamespace(is_enabled=lambda: False)
+    scheduler._handle_invalid_blocks = lambda *_args: pytest.fail("unexpected KV recovery")
+
+    assert scheduler._take_step_perf_stats(SimpleNamespace()) is None
+    assert scheduler._get_failed_kv_load_request_ids(None, {}) is None
+    assert scheduler._get_failed_kv_load_request_ids(SimpleNamespace(invalid_block_ids=[]), {}) is None
+
+
+def test_output_assembly_keeps_completion_stats_and_connector_capture_order():
+    scheduler = _Scheduler()
+    calls = []
+    scheduler._attach_finished_request_sets = lambda outputs, **kwargs: calls.append(
+        ("finished", outputs, kwargs)
+    )
+    scheduler._attach_scheduler_stats = lambda *args: calls.append(("stats", args))
+    scheduler._capture_omni_connector_output = lambda output: calls.append(("connector", output))
+    runner_output = SimpleNamespace()
+
+    assembled = scheduler._assemble_engine_core_outputs(
+        {3: []},
+        synthesize_abort_outputs=True,
+        spec_decoding_stats=None,
+        kv_connector_stats=None,
+        cudagraph_stats=None,
+        perf_stats=None,
+        model_runner_output=runner_output,
+    )
+
+    assert set(assembled) == {3}
+    assert [call[0] for call in calls] == ["finished", "stats", "connector"]
+    assert calls[0][2] == {"synthesize_abort_outputs": True}
