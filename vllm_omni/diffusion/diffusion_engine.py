@@ -427,6 +427,9 @@ class DiffusionEngine:
         generator = self.get_output_stream(request_id)
         async for output in generator:
             exec_total_time = time.perf_counter() - exec_start_time
+            stage_queue_time_ms = float(output._stage_queue_time_ms)
+            stage_execution_start_ts = float(output._stage_execution_start_ts)
+            handoff_time_ms = float(output._handoff_time_ms)
             # Async mode: wait for background D2H/SHM to complete.
             if output.async_output_id:
                 fut = self.executor.wait_output_ready(output.async_output_id)
@@ -446,6 +449,11 @@ class DiffusionEngine:
             postprocess_start_time = time.perf_counter()
             formatted_outputs = self.postprocess_output(request, output)
             postprocess_time = time.perf_counter() - postprocess_start_time
+            stage_service_time_ms = (
+                max((time.perf_counter() - stage_execution_start_ts) * 1000.0, 0.0)
+                if stage_execution_start_ts > 0.0
+                else 0.0
+            )
             step_total_ms = (time.perf_counter() - diffusion_engine_start_time) * 1000
             logger.debug(
                 "DiffusionEngine.step_streaming breakdown: preprocess=%.2f ms, "
@@ -462,6 +470,9 @@ class DiffusionEngine:
                         "diffusion_engine_exec_time_ms": exec_total_time * 1000,
                         "diffusion_engine_total_time_ms": step_total_ms,
                         "postprocess_time_ms": postprocess_time * 1000,
+                        "stage_queue_time_ms": stage_queue_time_ms,
+                        "stage_service_time_ms": stage_service_time_ms,
+                        "handoff_time_ms": handoff_time_ms,
                     }
                 )
             yield formatted_outputs
@@ -813,7 +824,10 @@ class DiffusionEngine:
 
         pre_process_func = getattr(self, "pre_process_func", None)
         if pre_process_func is not None:
+            handoff_start_ts = request.handoff_start_ts
             request = pre_process_func(request)
+            if request.handoff_start_ts is None:
+                request.handoff_start_ts = handoff_start_ts
         self._validate_diffusion_kv_profile_limits(request)
         return request
 
@@ -1320,19 +1334,27 @@ class DiffusionEngine:
         if state.status == DiffusionRequestStatus.FINISHED_ABORTED:
             # Preserve runner-provided abort details when available.
             if runner_output is not None and runner_output.result is not None and runner_output.result.aborted:
-                return runner_output.result
-            return DiffusionOutput(
-                aborted=True,
-                abort_message=f"Request {request_id} aborted.",
-            )
+                output = runner_output.result
+            else:
+                output = DiffusionOutput(
+                    aborted=True,
+                    abort_message=f"Request {request_id} aborted.",
+                )
+        elif runner_output is not None and runner_output.result is not None:
+            output = runner_output.result
+        elif runner_output is not None and runner_output.async_output_id is not None:
+            output = DiffusionOutput(async_output_id=runner_output.async_output_id)
+        elif state.status == DiffusionRequestStatus.FINISHED_ERROR and state.error:
+            output = DiffusionOutput(error=state.error)
+        else:
+            output = DiffusionOutput(error=missing_result_error)
 
-        if runner_output is not None and runner_output.result is not None:
-            return runner_output.result
-
-        if runner_output is not None and runner_output.async_output_id is not None:
-            return DiffusionOutput(async_output_id=runner_output.async_output_id)
-
-        if state.status == DiffusionRequestStatus.FINISHED_ERROR and state.error:
-            return DiffusionOutput(error=state.error)
-
-        return DiffusionOutput(error=missing_result_error)
+        execution_start_ts = float(getattr(state, "execution_start_ts", 0.0))
+        output._stage_execution_start_ts = execution_start_ts
+        output._handoff_time_ms = float(getattr(state, "handoff_time_ms", 0.0))
+        output._stage_queue_time_ms = (
+            max((execution_start_ts - float(getattr(state, "enqueue_ts", 0.0))) * 1000.0, 0.0)
+            if execution_start_ts > 0.0 and float(getattr(state, "enqueue_ts", 0.0)) > 0.0
+            else 0.0
+        )
+        return output

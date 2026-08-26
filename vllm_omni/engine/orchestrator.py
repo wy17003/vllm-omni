@@ -184,6 +184,7 @@ class OrchestratorRequestState:
 
     # Metrics: timestamp when request was submitted to each stage.
     stage_submit_ts: dict[int, float] = field(default_factory=dict)
+    stage_output_ready_ts: dict[int, float] = field(default_factory=dict)
     mm_processor_kwargs: dict | None = None
     mm_features: list | None = None
     pd_prefill_multimodal_output: dict[str, Any] | None = None
@@ -1046,6 +1047,7 @@ class Orchestrator:
             stage_metrics = None
             segment_finished = req_state.streaming.enabled and req_state.streaming.segment_finished
             if output.finished or segment_finished:
+                req_state.stage_output_ready_ts[stage_id] = _time.perf_counter()
                 stage_metrics = pool.build_stage_metrics(
                     [output],
                     submit_ts=req_state.stage_submit_ts.get(stage_id, _time.time()),
@@ -1053,6 +1055,8 @@ class Orchestrator:
                     replica_id=replica_id,
                     sampling_params=req_state.sampling_params_list[stage_id],
                 )
+                if stage_id == 1 and stage_metrics.handoff_time_ms > 0.0:
+                    req_state.pipeline_timings["handoff_time_ms"] = stage_metrics.handoff_time_ms
                 stage_metrics.pipeline_timings = dict(req_state.pipeline_timings)
 
             await self._route_output(stage_id, replica_id, output, req_state, stage_metrics)
@@ -1772,6 +1776,7 @@ class Orchestrator:
             if (stage_id + 1) in req_state.stage_submit_ts:
                 continue
 
+            req_state.stage_output_ready_ts[stage_id] = _time.perf_counter()
             if self._cfg_tracker.has_companions(req_id) and not self._cfg_tracker.all_companions_done(req_id):
                 self._cfg_tracker.defer_parent(req_id, raw_output, stage_id)
             else:
@@ -2049,7 +2054,8 @@ class Orchestrator:
                         "kv_sender_info": self._build_kv_sender_info(
                             list(getattr(next_client, "engine_input_source", None) or [src_stage_id]),
                             request_id=req_id,
-                        )
+                        ),
+                        "handoff_start_ts": req_state.stage_output_ready_ts.get(src_stage_id),
                     },
                     params_override=self._maybe_clone_diffusion_params_for_cfg(req_id, params),
                 )

@@ -63,6 +63,22 @@ def _mean_time_per_output_token_ms(stats: RequestStateStats) -> float:
     return decode_time_s * 1000.0 / float(output_intervals)
 
 
+def _text_phase_times_ms(stats: RequestStateStats, finished_request: Any | None = None) -> tuple[float, float]:
+    """Return the same per-request phase boundaries used by vLLM metrics."""
+    prefill_s = getattr(finished_request, "prefill_time", None)
+    decode_s = getattr(finished_request, "decode_time", None)
+    if prefill_s is None:
+        first_scheduled_ts = float(getattr(stats, "first_scheduled_ts", 0.0) or 0.0)
+        prefill_s = (
+            max(float(stats.first_token_ts) - first_scheduled_ts, 0.0)
+            if first_scheduled_ts > 0.0
+            else stats.first_token_latency
+        )
+    if decode_s is None:
+        decode_s = max(stats.last_token_ts - stats.first_token_ts, 0.0)
+    return max(float(prefill_s) * 1000.0, 0.0), max(float(decode_s) * 1000.0, 0.0)
+
+
 class OmniRequestState(RequestState):
     """Request state for omni models, tracking multimodal outputs.
 
@@ -409,6 +425,8 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
                 "vllm_tpot_ms": 0.0,
                 "vllm_itl_ms": 0.0,
                 "vllm_itls_ms": [],
+                "vllm_prefill_time_ms": 0.0,
+                "vllm_decode_time_ms": 0.0,
             },
         )
 
@@ -676,6 +694,9 @@ class MultimodalOutputProcessor(VLLMOutputProcessor):
         finished_request = iteration_stats.finished_requests[-1]
         if finished_request.request_id != req_state.external_req_id:
             return
-        self._native_text_metric_record(req_state.external_req_id)["vllm_tpot_ms"] = (
-            float(finished_request.mean_time_per_output_token) * 1000.0
+        record = self._native_text_metric_record(req_state.external_req_id)
+        record["vllm_tpot_ms"] = float(finished_request.mean_time_per_output_token) * 1000.0
+        record["vllm_prefill_time_ms"], record["vllm_decode_time_ms"] = _text_phase_times_ms(
+            native_stats,
+            finished_request,
         )

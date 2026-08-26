@@ -55,14 +55,17 @@ def client(mock_engine):
 @pytest.mark.asyncio
 async def test_inline_dispatch_request_success(client, mock_engine):
     mock_result = OmniRequestOutput.from_diffusion(request_id="req-1", images=[MagicMock()])
+    captured_request = None
 
-    async def _step_streaming(_request):
+    async def _step_streaming(request):
+        nonlocal captured_request
+        captured_request = request
         yield [mock_result]
 
     mock_engine.step_streaming = _step_streaming
 
     sampling_params = OmniDiffusionSamplingParams()
-    await client.add_request_async("req-1", "A test prompt", sampling_params)
+    await client.add_request_async("req-1", "A test prompt", sampling_params, handoff_start_ts=123.0)
 
     # Wait for the task to be processed
     for _ in range(10):
@@ -73,6 +76,7 @@ async def test_inline_dispatch_request_success(client, mock_engine):
 
     assert output is not None
     assert output.request_id == "req-1"
+    assert captured_request.handoff_start_ts == 123.0
 
 
 @pytest.mark.asyncio

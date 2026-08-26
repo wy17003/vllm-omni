@@ -1480,6 +1480,12 @@ class DiffusionOutput:
     # memory usage info
     peak_memory_mb: float = 0.0
 
+    # Engine-local scheduler timestamps. They are consumed before formatting
+    # and are not exposed as public request metrics.
+    _stage_queue_time_ms: float = 0.0
+    _stage_execution_start_ts: float = 0.0
+    _handoff_time_ms: float = 0.0
+
     # When True, move tensor fields to CPU at construction time. Useful when
     # the output is shipped across process boundaries (e.g. step-execution
     # mode) and the receiving side must not initialise a stray CUDA context.

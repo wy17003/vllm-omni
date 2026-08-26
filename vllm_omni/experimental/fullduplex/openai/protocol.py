@@ -752,6 +752,11 @@ class DuplexSession:
             "audio_duration_s",
             "image_pixels",
             "output_unit_count",
+            "vllm_prefill_time_ms",
+            "vllm_decode_time_ms",
+            "handoff_time_ms",
+            "stage_queue_time_ms",
+            "stage_service_time_ms",
         )
         first_positive_fields = (
             "serving_time_to_first_output_ms",

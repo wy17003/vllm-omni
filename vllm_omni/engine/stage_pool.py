@@ -620,6 +620,9 @@ class StagePool:
             if callable(pop_native_text_metrics):
                 native_text_metrics = pop_native_text_metrics(request_id)
         native_generation_tokens = native_text_metrics.get("num_generation_tokens")
+        output_metrics = getattr(request_outputs[0], "metrics", {}) if request_outputs else {}
+        if not isinstance(output_metrics, dict):
+            output_metrics = {}
         num_tokens_out = (
             max(int(native_generation_tokens), 0)
             if isinstance(native_generation_tokens, int) and not isinstance(native_generation_tokens, bool)
@@ -710,6 +713,11 @@ class StagePool:
             vllm_tpot_ms=float(native_text_metrics.get("vllm_tpot_ms") or 0.0),
             vllm_itl_ms=float(native_text_metrics.get("vllm_itl_ms") or 0.0),
             vllm_itls_ms=list(native_text_metrics.get("vllm_itls_ms") or []),
+            vllm_prefill_time_ms=float(native_text_metrics.get("vllm_prefill_time_ms") or 0.0),
+            vllm_decode_time_ms=float(native_text_metrics.get("vllm_decode_time_ms") or 0.0),
+            handoff_time_ms=float(output_metrics.get("handoff_time_ms") or 0.0),
+            stage_queue_time_ms=float(output_metrics.get("stage_queue_time_ms") or 0.0),
+            stage_service_time_ms=float(output_metrics.get("stage_service_time_ms") or 0.0),
         )
 
     def _infer_output_unit_type(self, request_outputs: list[Any], *, token_count: int) -> str:

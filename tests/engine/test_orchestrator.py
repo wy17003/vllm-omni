@@ -703,6 +703,7 @@ async def test_run_llm_to_diffusion(orchestrator_factory) -> None:
                 request_id="req-img",
                 images=[],
                 final_output_type="image",
+                metrics={"handoff_time_ms": 1.0},
             )
         )
 
@@ -712,6 +713,7 @@ async def test_run_llm_to_diffusion(orchestrator_factory) -> None:
         assert output_msg.stage_id == 1
         assert output_msg.finished is True
         assert output_msg.engine_outputs.request_id == "req-img"
+        assert output_msg.metrics.handoff_time_ms > 0.0
         assert "req-img" not in orchestrator_fixture.orchestrator.request_states
     finally:
         await _shutdown_orchestrator(orchestrator_fixture)
@@ -1973,7 +1975,11 @@ def test_stage_pool_metrics_use_resumable_segment_token_count() -> None:
     class SegmentMetricsOutputProcessor(FakeOutputProcessor):
         def pop_native_text_metrics(self, request_id: str) -> dict[str, Any]:
             assert request_id == "req-stream"
-            return {"num_generation_tokens": 3}
+            return {
+                "num_generation_tokens": 3,
+                "vllm_prefill_time_ms": 2.5,
+                "vllm_decode_time_ms": 7.5,
+            }
 
     stage0 = FakeStageClient(stage_type="llm", final_output=False)
     pool = StagePool(
@@ -1996,6 +2002,8 @@ def test_stage_pool_metrics_use_resumable_segment_token_count() -> None:
 
     assert metrics.num_tokens_out == 3
     assert metrics.output_unit_count == 3
+    assert metrics.vllm_prefill_time_ms == 2.5
+    assert metrics.vllm_decode_time_ms == 7.5
 
 
 @pytest.mark.asyncio

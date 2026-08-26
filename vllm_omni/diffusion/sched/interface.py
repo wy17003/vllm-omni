@@ -157,6 +157,9 @@ class SchedulerRequestState:
     diffusion_kv_requests: tuple[DiffusionKVRequest, ...] = ()
     status: DiffusionRequestStatus = DiffusionRequestStatus.WAITING
     error: str | None = None
+    enqueue_ts: float = 0.0
+    execution_start_ts: float = 0.0
+    handoff_time_ms: float = 0.0
 
     def is_finished(self) -> bool:
         return DiffusionRequestStatus.is_finished(self.status)

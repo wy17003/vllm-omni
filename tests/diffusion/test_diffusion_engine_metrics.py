@@ -102,6 +102,9 @@ class TestMetricKeys:
         assert '"diffusion_engine_exec_time_ms": exec_total_time * 1000' in step_streaming_source
         assert '"diffusion_engine_total_time_ms": step_total_ms' in step_streaming_source
         assert '"postprocess_time_ms": postprocess_time * 1000' in step_streaming_source
+        assert '"stage_queue_time_ms": stage_queue_time_ms' in step_streaming_source
+        assert '"stage_service_time_ms": stage_service_time_ms' in step_streaming_source
+        assert '"handoff_time_ms": handoff_time_ms' in step_streaming_source
 
 
 class TestDummyRunAllocation:

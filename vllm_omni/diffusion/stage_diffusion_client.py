@@ -334,6 +334,7 @@ class StageDiffusionClient(StageClientBase):
         prompt: OmniPromptType,
         sampling_params: OmniDiffusionSamplingParams,
         kv_sender_info: dict[int, dict[str, Any]] | None = None,
+        handoff_start_ts: float | None = None,
     ) -> None:
         if self._engine_dead:
             raise EngineDeadError()
@@ -351,6 +352,7 @@ class StageDiffusionClient(StageClientBase):
                     "prompt": prompt,
                     "sampling_params": self._sampling_params_to_dict(sampling_params),
                     "kv_sender_info": kv_sender_info,
+                    "handoff_start_ts": handoff_start_ts,
                 }
             )
         )

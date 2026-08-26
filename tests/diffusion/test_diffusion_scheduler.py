@@ -447,6 +447,22 @@ class TestRequestScheduler:
         assert self.scheduler.get_request_state(req_id).status == DiffusionRequestStatus.FINISHED_COMPLETED
         assert self.scheduler.has_requests() is False
 
+    def test_records_enqueue_and_first_execution_start_timestamps(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        timestamps = iter((10.0, 10.125))
+        monkeypatch.setattr("vllm_omni.diffusion.sched.base_scheduler.time.perf_counter", lambda: next(timestamps))
+
+        request = _make_request("timed")
+        request.handoff_start_ts = 9.5
+        req_id = self.scheduler.add_request(request)
+        state = self.scheduler.get_request_state(req_id)
+        assert state is not None
+        assert state.enqueue_ts == 10.0
+        assert state.handoff_time_ms == pytest.approx(500.0)
+
+        self.scheduler.schedule()
+
+        assert state.execution_start_ts == 10.125
+
     def test_diffusion_kv_request_moves_to_scheduler_state(self) -> None:
         _initialize_paged_scheduler(self.scheduler)
         request = _make_request("diffusion-kv")
@@ -1253,6 +1269,25 @@ class TestDiffusionEngine:
         output = engine._finalize_finished_request(req_id)
 
         assert output.error == "KV request cannot fit"
+
+    def test_finalize_finished_request_attaches_scheduler_timing(self) -> None:
+        engine = DiffusionEngine.__new__(DiffusionEngine)
+        engine.scheduler = RequestScheduler()
+        engine.scheduler.initialize(SimpleNamespace(request_batch_max_wait_ms=0.0))
+
+        req_id = engine.scheduler.add_request(_make_request("req-timing"))
+        state = engine.scheduler.get_request_state(req_id)
+        assert state is not None
+        state.enqueue_ts = 20.0
+        state.execution_start_ts = 20.025
+        state.handoff_time_ms = 12.5
+        engine.scheduler.finish_requests(req_id, DiffusionRequestStatus.FINISHED_COMPLETED)
+
+        output = engine._finalize_finished_request(req_id, _make_request_output(req_id))
+
+        assert output._stage_queue_time_ms == pytest.approx(25.0)
+        assert output._stage_execution_start_ts == 20.025
+        assert output._handoff_time_ms == 12.5
 
     @pytest.mark.asyncio
     async def test_streaming_runner_output_notifies_each_chunk(self) -> None:

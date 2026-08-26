@@ -114,6 +114,7 @@ def _req_state(final_stage_id: int = 1) -> SimpleNamespace:
     return SimpleNamespace(
         final_stage_id=final_stage_id,
         stage_submit_ts={},
+        stage_output_ready_ts={},
         sampling_params_list=[SimpleNamespace(output_kind=None)] * (final_stage_id + 1),
         streaming=SimpleNamespace(enabled=False, segment_finished=False),
         running_counter_registered=False,
@@ -148,6 +149,8 @@ async def test_parent_kv_ready_defers_until_companion_outputs_stashed():
 
     raw = SimpleNamespace(request_id="p", kv_transfer_params={"kv_ready": True})
     await orch._handle_kv_ready_raw_outputs(0, SimpleNamespace(outputs=[raw]))
+
+    assert orch.request_states["p"].stage_output_ready_ts[0] > 0.0
 
     deferred = orch._cfg_tracker.pop_pending_parent("p")
     assert deferred is not None and deferred["stage_id"] == 0

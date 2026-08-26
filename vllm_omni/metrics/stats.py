@@ -61,6 +61,11 @@ class StageRequestStats:
     vllm_tpot_ms: float = 0.0
     vllm_itl_ms: float = 0.0
     vllm_itls_ms: list[float] | None = None
+    vllm_prefill_time_ms: float = 0.0
+    vllm_decode_time_ms: float = 0.0
+    handoff_time_ms: float = 0.0
+    stage_queue_time_ms: float = 0.0
+    stage_service_time_ms: float = 0.0
 
     @property
     def rx_mbps(self) -> float:
@@ -487,6 +492,11 @@ class OrchestratorAggregator:
                 defs.VLLM_TPOT_MS: float(evt.vllm_tpot_ms),
                 defs.VLLM_ITL_MS: float(evt.vllm_itl_ms),
                 defs.VLLM_ITLS_MS: list(evt.vllm_itls_ms or []),
+                defs.VLLM_PREFILL_TIME_MS: float(evt.vllm_prefill_time_ms),
+                defs.VLLM_DECODE_TIME_MS: float(evt.vllm_decode_time_ms),
+                defs.HANDOFF_TIME_MS: float(evt.handoff_time_ms),
+                defs.STAGE_QUEUE_TIME_MS: float(evt.stage_queue_time_ms),
+                defs.STAGE_SERVICE_TIME_MS: float(evt.stage_service_time_ms),
             }
             return current
 
@@ -536,6 +546,14 @@ class OrchestratorAggregator:
         vllm_itls.extend(list(evt.vllm_itls_ms or []))
         current[defs.VLLM_ITLS_MS] = vllm_itls
         current[defs.VLLM_ITL_MS] = sum(vllm_itls) / float(len(vllm_itls)) if vllm_itls else 0.0
+        for field_name, event_value in (
+            (defs.VLLM_PREFILL_TIME_MS, evt.vllm_prefill_time_ms),
+            (defs.VLLM_DECODE_TIME_MS, evt.vllm_decode_time_ms),
+            (defs.HANDOFF_TIME_MS, evt.handoff_time_ms),
+            (defs.STAGE_QUEUE_TIME_MS, evt.stage_queue_time_ms),
+            (defs.STAGE_SERVICE_TIME_MS, evt.stage_service_time_ms),
+        ):
+            current[field_name] = float(current.get(field_name, 0.0)) + float(event_value)
 
         output_count = int(current.get(defs.OUTPUT_UNIT_COUNT, 0))
         remaining_ms = max(

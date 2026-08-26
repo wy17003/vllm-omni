@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import fields
@@ -117,6 +118,10 @@ class BaseScheduler(ABC):
         if request_id in self._request_states:
             raise ValueError(f"request_id {request_id!r} is already active.")
         state = self._make_request_state(request_id, request)
+        state.enqueue_ts = time.perf_counter()
+        handoff_start_ts = getattr(request, "handoff_start_ts", None)
+        if handoff_start_ts is not None:
+            state.handoff_time_ms = max((state.enqueue_ts - float(handoff_start_ts)) * 1000.0, 0.0)
         self._request_states[request_id] = state
         self._waiting.append(request_id)
         logger.debug("%s add_request: %s (waiting=%d)", self.__class__.__name__, request_id, len(self._waiting))
@@ -176,6 +181,8 @@ class BaseScheduler(ABC):
             if not self._running:
                 self._running_sampling_params_key = state.sampling_params_key
             state.status = DiffusionRequestStatus.RUNNING
+            if state.execution_start_ts <= 0.0:
+                state.execution_start_ts = time.perf_counter()
             self._running.append(request_id)
             if was_new_request:
                 scheduled_new_reqs.append(

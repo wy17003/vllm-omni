@@ -72,6 +72,38 @@ def test_orchestrator_aggregator_builds_summary() -> None:
     assert e2e_entry["e2e_total_tokens"] == 10
 
 
+def test_stage_metrics_snapshot_includes_scheduler_phase_timings() -> None:
+    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e=1)
+    agg.on_stage_metrics(
+        1,
+        "timed-request",
+        StageRequestStats(
+            batch_id=1,
+            batch_size=1,
+            num_tokens_in=0,
+            num_tokens_out=1,
+            stage_gen_time_ms=40.0,
+            rx_transfer_bytes=0,
+            rx_decode_time_ms=0.0,
+            rx_in_flight_time_ms=0.0,
+            stage_stats=StageStats(),
+            vllm_prefill_time_ms=2.0,
+            vllm_decode_time_ms=18.0,
+            handoff_time_ms=3.0,
+            stage_queue_time_ms=4.0,
+            stage_service_time_ms=33.0,
+        ),
+    )
+
+    stage = agg._build_stage_metrics_snapshot("timed-request")["1"]
+
+    assert stage["vllm_prefill_time_ms"] == 2.0
+    assert stage["vllm_decode_time_ms"] == 18.0
+    assert stage["handoff_time_ms"] == 3.0
+    assert stage["stage_queue_time_ms"] == 4.0
+    assert stage["stage_service_time_ms"] == 33.0
+
+
 def test_build_and_log_summary_e2e_only() -> None:
     agg = OrchestratorAggregator(num_stages=1, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e=0)
     agg.e2e_events.append(

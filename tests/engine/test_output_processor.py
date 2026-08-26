@@ -104,6 +104,20 @@ def test_native_text_tpot_snapshot_matches_vllm_finished_metric_definition():
     assert calculate(stats) == pytest.approx(15.0)
 
 
+def test_native_text_phase_times_match_vllm_finished_request_metrics():
+    calculate = getattr(output_processor, "_text_phase_times_ms", None)
+    assert calculate is not None
+    stats = SimpleNamespace(
+        first_token_latency=0.25,
+        first_token_ts=10.25,
+        last_token_ts=10.65,
+    )
+    finished_request = SimpleNamespace(prefill_time=0.2, decode_time=0.4)
+
+    assert calculate(stats, finished_request) == pytest.approx((200.0, 400.0))
+    assert calculate(stats) == pytest.approx((250.0, 400.0))
+
+
 def test_native_text_metrics_include_segment_generation_token_count(monkeypatch):
     monkeypatch.setattr(VLLMOutputProcessor, "_update_stats_from_output", lambda *args, **kwargs: None)
     processor = object.__new__(MultimodalOutputProcessor)
