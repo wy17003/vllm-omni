@@ -24,6 +24,7 @@ from vllm_omni.config.stage_config import (
     _STAGE_DEPLOY_FIELDS,
     PIPELINE_WIDE_ENGINE_FIELDS,
     DeployConfig,
+    PDRole,
     PipelineConfig,
     StageDeployConfig,
     StageExecutionType,
@@ -122,6 +123,10 @@ class _ParallelEngineOverrides(_ParallelConfigEngineOverrides, total=False):
     parallel_config: _ParallelConfigEngineOverrides | Mapping[str, Any]
 
 
+class _ConnectorEngineOverrides(TypedDict, total=False):
+    kv_transfer_config: dict[str, Any]
+
+
 @dataclass(frozen=True)
 class _StageEngineValues:
     """Typed projections of legacy flat per-stage ``yaml_engine_args``."""
@@ -133,6 +138,7 @@ class _StageEngineValues:
     scheduler: _SchedulerEngineOverrides
     runtime: _RuntimeEngineOverrides
     parallel: _ParallelEngineOverrides
+    connector: _ConnectorEngineOverrides
     diffusion: _DiffusionEngineOverrides
 
 
@@ -308,6 +314,7 @@ class OmniStageSchedulerConfig:
 class OmniStageConnectorConfig:
     """Per-stage inter-stage connector wiring."""
 
+    kv_transfer_config: dict[str, Any] | None = None
     stage_connector: dict[str, Any] = field(
         default_factory=lambda: {
             "name": "SharedMemoryConnector",
@@ -716,6 +723,7 @@ _SCHEDULER_ENGINE_FIELDS = frozenset(_SchedulerEngineOverrides.__annotations__)
 _RUNTIME_ENGINE_FIELDS = frozenset(_RuntimeEngineOverrides.__annotations__)
 _PARALLEL_CONFIG_ENGINE_FIELDS = frozenset(_ParallelConfigEngineOverrides.__annotations__)
 _PARALLEL_ENGINE_FIELDS = _PARALLEL_CONFIG_ENGINE_FIELDS | {"parallel_config"}
+_CONNECTOR_ENGINE_FIELDS = frozenset(_ConnectorEngineOverrides.__annotations__)
 
 
 def _global_stage_cli_fields() -> frozenset[str]:
@@ -772,6 +780,7 @@ def _stage_engine_values(
         ),
         runtime=cast(_RuntimeEngineOverrides, _select_engine_overrides(engine, _RUNTIME_ENGINE_FIELDS)),
         parallel=cast(_ParallelEngineOverrides, _select_engine_overrides(engine, _PARALLEL_ENGINE_FIELDS)),
+        connector=cast(_ConnectorEngineOverrides, _select_engine_overrides(engine, _CONNECTOR_ENGINE_FIELDS)),
         diffusion=_DiffusionEngineOverrides.from_engine(engine),
     )
 
@@ -837,6 +846,10 @@ class BaseVllmOmniStageConfig:
     @property
     def model_stage(self) -> str:
         return self.stage_pipeline_config.model_stage
+
+    @property
+    def pd_role(self) -> PDRole | None:
+        return self.stage_pipeline_config.pd_role
 
     @property
     def input_sources(self) -> list[int]:
@@ -947,7 +960,7 @@ def _build_common_stage_config_kwargs(
             "load_config": _build_load_config(engine.load),
             "cache_config": _build_cache_config(deploy, engine.cache),
             "scheduler_config": _build_scheduler_config(deploy, engine.scheduler),
-            "connector_config": _build_connector_config(stage_deploy),
+            "connector_config": _build_connector_config(stage_deploy, engine.connector),
             "runtime_config": _build_runtime_config(stage_deploy, engine.runtime, parallel_config),
             "parallel_config": parallel_config,
             "quantization_config": _copy_value(quantization_config),
@@ -1131,10 +1144,14 @@ def _build_scheduler_config(
     return OmniStageSchedulerConfig(**kwargs)
 
 
-def _build_connector_config(stage_deploy: StageDeployConfig | None) -> OmniStageConnectorConfig:
+def _build_connector_config(
+    stage_deploy: StageDeployConfig | None,
+    engine: _ConnectorEngineOverrides,
+) -> OmniStageConnectorConfig:
     output_connectors = stage_deploy.output_connectors if stage_deploy is not None else None
     input_connectors = stage_deploy.input_connectors if stage_deploy is not None else None
     return OmniStageConnectorConfig(
+        kv_transfer_config=_copy_value(engine.get("kv_transfer_config")),
         output_connectors=_copy_value(output_connectors) if output_connectors else None,
         input_connectors=_copy_value(input_connectors) if input_connectors else None,
     )

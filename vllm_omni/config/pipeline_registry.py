@@ -52,6 +52,7 @@ from vllm_omni.model_executor.models.higgs_audio_v3.pipeline import HIGGS_AUDIO_
 from vllm_omni.model_executor.models.hunyuan_image3.pipeline import (
     HUNYUAN_IMAGE3_AR_PIPELINE,
     HUNYUAN_IMAGE3_DIT_PIPELINE,
+    HUNYUAN_IMAGE3_PD_PIPELINE,
     HUNYUAN_IMAGE3_PIPELINE,
 )
 from vllm_omni.model_executor.models.indextts2.pipeline import INDEXTTS2_PIPELINE
@@ -103,6 +104,7 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "Gr00tN1d7": GR00T_N1D7_PIPELINE,
     "glm_image": GLM_IMAGE_PIPELINE,
     "hunyuan_image_3_moe": HUNYUAN_IMAGE3_PIPELINE,
+    "hunyuan_image3_pd": HUNYUAN_IMAGE3_PD_PIPELINE,
     "hunyuan_image3_ar": HUNYUAN_IMAGE3_AR_PIPELINE,
     "hunyuan_image3_dit": HUNYUAN_IMAGE3_DIT_PIPELINE,
     "voxcpm2": VOXCPM2_PIPELINE,

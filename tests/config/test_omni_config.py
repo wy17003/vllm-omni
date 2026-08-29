@@ -31,6 +31,7 @@ from vllm_omni.config.stage_config import (
     _STAGE_DEPLOY_FIELDS,
     PIPELINE_WIDE_ENGINE_FIELDS,
     DeployConfig,
+    PDRole,
     PipelineConfig,
     StageDeployConfig,
     StageExecutionType,
@@ -38,6 +39,7 @@ from vllm_omni.config.stage_config import (
     merge_pipeline_deploy,
 )
 from vllm_omni.engine.stage_init_utils import build_engine_args_dict
+from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -66,6 +68,37 @@ def _resolve_pipeline_or_skip(model_type: str) -> PipelineConfig:
     if pipeline is None:
         pytest.skip(f"Pipeline {model_type!r} requires an HF config to resolve")
     return pipeline
+
+
+def test_hunyuan_image3_pd_structured_config_projects_vllm_kv_transfer() -> None:
+    pipeline = _resolve_pipeline_or_skip("hunyuan_image3_pd")
+    omni_config = VllmOmniConfig.from_registry("hunyuan_image3_pd")
+
+    prefill = omni_config.stage_by_id(0)
+    decode = omni_config.stage_by_id(1)
+    assert prefill.connector_config.kv_transfer_config == {
+        "kv_connector": "MooncakeConnector",
+        "kv_role": "kv_producer",
+        "kv_rank": 0,
+        "kv_parallel_size": 2,
+        "kv_ip": "127.0.0.1",
+        "kv_connector_extra_config": {"mooncake_bootstrap_port": 25201},
+    }
+    assert decode.connector_config.kv_transfer_config == {
+        "kv_connector": "MooncakeConnector",
+        "kv_role": "kv_consumer",
+        "kv_rank": 1,
+        "kv_parallel_size": 2,
+        "kv_ip": "127.0.0.1",
+        "kv_connector_extra_config": {"mooncake_bootstrap_port": 25202},
+    }
+
+    deploy = load_deploy_config(_DEPLOY_DIR / pipeline.default_deploy_config_name)
+    stages = merge_pipeline_deploy(pipeline, deploy)
+    omega_stages = [stage.to_omegaconf() for stage in stages]
+    assert [stage.pd_role for stage in stages] == [PDRole.PREFILL, PDRole.DECODE, None]
+    assert PDDisaggregationMixin.detect_pd_separation_from_stage_configs(omega_stages) == (0, 1)
+    assert PDDisaggregationMixin.get_mooncake_bootstrap_addr(omega_stages[0]) == "http://127.0.0.1:25201"
 
 
 @pytest.mark.parametrize("model_type", sorted(OMNI_PIPELINES))

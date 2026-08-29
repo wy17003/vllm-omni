@@ -27,6 +27,7 @@ def _make_engine_core_request(request_id: str = "req-1") -> EngineCoreRequest:
 
 def test_build_add_request_message_preserves_additional_information(mocker: MockerFixture):
     engine = object.__new__(AsyncOmniEngine)
+    engine._pd_pair = None
     params = SamplingParams(max_tokens=8)
     engine.default_sampling_params_list = [params]
     engine.stage_metadata = [StageRuntimeInfo(final_output=False, final_output_type=None, stage_type="llm")]
@@ -64,8 +65,40 @@ def test_build_add_request_message_preserves_additional_information(mocker: Mock
     output_processor.add_request.assert_not_called()
 
 
+def test_build_add_request_message_prepares_mooncake_prefill_params(mocker: MockerFixture):
+    engine = object.__new__(AsyncOmniEngine)
+    params = SamplingParams(max_tokens=8)
+    engine.default_sampling_params_list = [params]
+    engine._pd_pair = (0, 1)
+    engine.stage_metadata = [StageRuntimeInfo(final_output=False, final_output_type=None, stage_type="llm")]
+    engine.supported_tasks = ("generate",)
+
+    input_processor = mocker.Mock()
+    input_processor.process_inputs.return_value = _make_engine_core_request()
+    engine.input_processor = input_processor
+    engine.output_processors = [mocker.Mock()]
+
+    msg = engine._build_add_request_message(
+        request_id="req-pd",
+        prompt={"prompt_token_ids": [1, 2, 3]},
+        sampling_params_list=[params],
+        final_stage_id=2,
+    )
+
+    prefill_params = msg.sampling_params_list[0]
+    kv_params = prefill_params.extra_args["kv_transfer_params"]
+    assert prefill_params.max_tokens == 1
+    assert kv_params["do_remote_decode"] is True
+    assert kv_params["do_remote_prefill"] is False
+    assert kv_params["transfer_id"] == "xfer-req-pd"
+    assert input_processor.process_inputs.call_args.kwargs["params"] is prefill_params
+    assert params.max_tokens == 8
+    assert params.extra_args is None
+
+
 def test_build_add_request_message_with_resumable_streaming(mocker: MockerFixture):
     engine = object.__new__(AsyncOmniEngine)
+    engine._pd_pair = None
     params = SamplingParams(max_tokens=8)
     engine.default_sampling_params_list = [params]
     engine.stage_metadata = [StageRuntimeInfo(final_output=False, final_output_type=None, stage_type="llm")]
@@ -137,6 +170,7 @@ def _replica(input_addr: str) -> ReplicaInfo:
 
 def test_build_add_request_message_scopes_mm_uuids_to_selected_stage0_replica(mocker: MockerFixture):
     engine = object.__new__(AsyncOmniEngine)
+    engine._pd_pair = None
     params = SamplingParams(max_tokens=8)
     engine.model = "test-model"
     engine.default_sampling_params_list = [params]
@@ -174,6 +208,7 @@ def test_build_add_request_message_scopes_mm_uuids_to_selected_stage0_replica(mo
 @pytest.mark.asyncio
 async def test_build_add_request_message_scopes_mm_uuids_to_distributed_stage0_replica(mocker: MockerFixture):
     engine = object.__new__(AsyncOmniEngine)
+    engine._pd_pair = None
     params = SamplingParams(max_tokens=8)
     engine.model = "test-model"
     engine.default_sampling_params_list = [params]
@@ -219,6 +254,7 @@ async def test_build_add_request_message_scopes_mm_uuids_to_distributed_stage0_r
 
 def test_build_add_request_message_skips_distributed_mm_scope_when_no_replica(mocker: MockerFixture):
     engine = object.__new__(AsyncOmniEngine)
+    engine._pd_pair = None
     params = SamplingParams(max_tokens=8)
     engine.model = "test-model"
     engine.default_sampling_params_list = [params]
@@ -274,6 +310,7 @@ def test_stage_pool_is_distributed_falls_back_to_hub():
 
 def test_build_add_request_message_releases_preselected_replica_on_preprocess_error(mocker: MockerFixture):
     engine = object.__new__(AsyncOmniEngine)
+    engine._pd_pair = None
     params = SamplingParams(max_tokens=8)
     engine.model = "test-model"
     engine.default_sampling_params_list = [params]
