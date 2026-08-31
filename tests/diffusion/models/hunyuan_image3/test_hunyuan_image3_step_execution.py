@@ -20,6 +20,7 @@ from vllm_omni.diffusion.models.hunyuan_image3.pipeline_hunyuan_image3 import (
     _STEP_MODEL_KWARGS,
     _STEP_PROMPT_KV,
     HunyuanImage3Pipeline,
+    _decode_dit_token_ids,
 )
 from vllm_omni.diffusion.models.hunyuan_image3.request_layout import HunyuanPreparedLayout
 from vllm_omni.diffusion.worker.input_batch import InputBatch
@@ -101,6 +102,19 @@ def _prepared_layout() -> HunyuanPreparedLayout:
             image_token_length=16,
         ),
     )
+
+
+def test_decode_dit_token_ids_compacts_image_placeholder_runs():
+    class FakeTokenizerWrapper:
+        img_token_id = 99
+
+        @staticmethod
+        def decode(token_ids, **_kwargs):
+            return "".join({1: "A", 2: "B"}.get(token_id, f"<{token_id}>") for token_id in token_ids)
+
+    decoded = _decode_dit_token_ids(FakeTokenizerWrapper(), [1, 99, 99, 99, 2])
+
+    assert decoded == "A<img x 3>B"
 
 
 def test_prepare_model_inputs_reuses_prepared_layout(monkeypatch):

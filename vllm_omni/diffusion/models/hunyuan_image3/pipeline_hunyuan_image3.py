@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import copy
+import json
 import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -74,6 +75,7 @@ _STEP_AR_KV = "hunyuan_ar_kv"
 _STEP_PROMPT_KV = "hunyuan_prompt_kv"
 
 _HUNYUAN_DEFAULT_OUTPUT_TYPE = "pil"
+_LOGGED_DIT_TOKEN_ID_LIMIT = 16
 
 
 def default(val, d):
@@ -89,6 +91,155 @@ def to_device(data, device):
         return [to_device(x, device) for x in data]
     else:
         return data
+
+
+def _summarize_dit_token_ids(token_ids: list[int]) -> list[int] | dict[str, Any]:
+    if len(token_ids) <= _LOGGED_DIT_TOKEN_ID_LIMIT:
+        return token_ids
+    return {
+        "count": len(token_ids),
+        "head": token_ids[:_LOGGED_DIT_TOKEN_ID_LIMIT],
+        "tail": token_ids[-_LOGGED_DIT_TOKEN_ID_LIMIT:],
+    }
+
+
+def _decode_dit_token_ids(tkwrapper: Any, token_ids: list[int]) -> str:
+    """Decode one DiT row while compacting long generated-image spans."""
+    decode = getattr(tkwrapper, "decode", None)
+    if decode is None:
+        return "<decode unavailable>"
+
+    def decode_text(ids: list[int]) -> str:
+        if not ids:
+            return ""
+        try:
+            return decode(ids, skip_special_tokens=False, clean_up_tokenization_spaces=False)
+        except TypeError:
+            try:
+                return decode(ids, skip_special_tokens=False)
+            except Exception as exc:  # Logging must not affect inference.
+                return f"<decode failed: {type(exc).__name__}>"
+        except Exception as exc:  # Logging must not affect inference.
+            return f"<decode failed: {type(exc).__name__}>"
+
+    img_token_id = getattr(tkwrapper, "img_token_id", None)
+    if img_token_id is None:
+        return decode_text(token_ids)
+
+    parts: list[str] = []
+    text_start = 0
+    index = 0
+    while index < len(token_ids):
+        if token_ids[index] != img_token_id:
+            index += 1
+            continue
+        parts.append(decode_text(token_ids[text_start:index]))
+        run_end = index + 1
+        while run_end < len(token_ids) and token_ids[run_end] == img_token_id:
+            run_end += 1
+        parts.append(f"<img x {run_end - index}>")
+        index = run_end
+        text_start = run_end
+    parts.append(decode_text(token_ids[text_start:]))
+    return "".join(parts)
+
+
+def _summarize_dit_slices(value: Any) -> Any:
+    if isinstance(value, slice):
+        return {"start": value.start, "stop": value.stop, "step": value.step}
+    if isinstance(value, (list, tuple)):
+        return [_summarize_dit_slices(item) for item in value]
+    return value
+
+
+def _summarize_dit_tensor(value: Any, *, include_values: bool = False) -> Any:
+    if value is None:
+        return None
+    if not isinstance(value, torch.Tensor):
+        return value
+    summary: dict[str, Any] = {
+        "shape": list(value.shape),
+        "dtype": str(value.dtype),
+    }
+    if include_values:
+        summary["values"] = value.detach().cpu().tolist()
+    return summary
+
+
+def _log_reconstructed_dit_input(
+    tkwrapper: Any,
+    output: TokenizerEncodeOutput,
+    model_input_kwargs: dict[str, Any],
+    batch_gen_image_info: list[ImageInfo] | None,
+) -> None:
+    tokens = output.tokens
+    if tokens is None:
+        token_rows: list[list[int]] = []
+    else:
+        rows = tokens.detach().cpu()
+        if rows.ndim == 1:
+            rows = rows.unsqueeze(0)
+        token_rows = [[int(token_id) for token_id in row.tolist()] for row in rows]
+
+    image_mask = output.gen_image_mask
+    if image_mask is None:
+        image_mask_summary = None
+    else:
+        mask_rows = image_mask.detach().cpu()
+        if mask_rows.ndim == 1:
+            mask_rows = mask_rows.unsqueeze(0)
+        image_mask_summary = {
+            "shape": list(image_mask.shape),
+            "true_count_per_row": [int(row.sum().item()) for row in mask_rows],
+        }
+
+    generated_images = []
+    for info in batch_gen_image_info or []:
+        generated_images.append(
+            {
+                "image_size": [info.image_height, info.image_width],
+                "token_grid": [info.token_height, info.token_width],
+                "image_token_length": info.image_token_length,
+                "base_size": info.base_size,
+                "ratio_index": info.ratio_index,
+            }
+        )
+
+    payload = {
+        "mode": model_input_kwargs.get("mode"),
+        "num_inference_steps": model_input_kwargs.get("num_inference_steps"),
+        "guidance_scale": model_input_kwargs.get("guidance_scale"),
+        "input_ids": {
+            "shape": list(tokens.shape) if tokens is not None else None,
+            "rows": [
+                {
+                    "index": index,
+                    "token_ids": _summarize_dit_token_ids(row),
+                    "decoded": _decode_dit_token_ids(tkwrapper, row),
+                }
+                for index, row in enumerate(token_rows)
+            ],
+        },
+        "position_ids": _summarize_dit_tensor(model_input_kwargs.get("position_ids")),
+        "custom_pos_emb": [_summarize_dit_tensor(item) for item in (model_input_kwargs.get("custom_pos_emb") or ())],
+        "image_mask": image_mask_summary,
+        "gen_timestep_scatter_index": _summarize_dit_tensor(
+            output.gen_timestep_scatter_index,
+            include_values=True,
+        ),
+        "layout": {
+            "text_slices": _summarize_dit_slices(output.text_slices),
+            "gen_image_slices": _summarize_dit_slices(output.gen_image_slices),
+            "joint_image_slices": _summarize_dit_slices(output.joint_image_slices),
+            "think_recaption_end_pos": output.think_recaption_end_pos,
+            "real_pos": _summarize_dit_tensor(output.real_pos, include_values=True),
+        },
+        "generated_images": generated_images,
+    }
+    logger.info(
+        "[HunyuanImage3][DiT reconstructed model input]\n%s",
+        json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+    )
 
 
 def _to_pil_image(image: Any) -> PILImage.Image:
@@ -1265,6 +1416,14 @@ class HunyuanImage3Pipeline(
             eos_token_id=stop_token_id[bot_task],
             max_new_tokens=max_new_tokens,
         )
+
+        if mode == "gen_image":
+            _log_reconstructed_dit_input(
+                self._tkwrapper,
+                output,
+                model_input_kwargs,
+                batch_gen_image_info,
+            )
 
         return model_input_kwargs
 
