@@ -12,6 +12,7 @@ signature pattern as glm_image.ar2diffusion.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any
@@ -30,6 +31,43 @@ from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
 from vllm_omni.inputs.data import OmniTokensPrompt
 
 logger = init_logger(__name__)
+
+_IMAGE_PAYLOAD_KEYS = frozenset({"image", "images", "img2img", "mask_image", "reference_image", "pil_image"})
+_TOKEN_ID_KEYS = frozenset({"prompt_token_ids", "cumulative_token_ids", "token_ids"})
+_LOGGED_TOKEN_ID_LIMIT = 16
+
+
+def _summarize_for_log(value: Any, *, key: str | None = None) -> Any:
+    """Return a JSON-safe request summary without dumping image payloads."""
+    if key in _IMAGE_PAYLOAD_KEYS:
+        if isinstance(value, (list, tuple)):
+            return f"<{len(value)} image(s) omitted>"
+        return "<image omitted>"
+    if isinstance(value, Mapping):
+        return {
+            str(item_key): _summarize_for_log(item_value, key=str(item_key)) for item_key, item_value in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        if key in _TOKEN_ID_KEYS and len(value) > _LOGGED_TOKEN_ID_LIMIT:
+            return {
+                "count": len(value),
+                "head": list(value[:_LOGGED_TOKEN_ID_LIMIT]),
+                "tail": list(value[-_LOGGED_TOKEN_ID_LIMIT:]),
+            }
+        return [_summarize_for_log(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "shape") and hasattr(value, "dtype"):
+        return f"<{type(value).__name__} shape={tuple(value.shape)} dtype={value.dtype} omitted>"
+    return f"<{type(value).__name__} omitted>"
+
+
+def _log_hunyuan_request_part(label: str, payload: Mapping[str, Any]) -> None:
+    logger.info(
+        "[HunyuanImage3][%s]\n%s",
+        label,
+        json.dumps(_summarize_for_log(payload), ensure_ascii=False, indent=2, default=str),
+    )
 
 
 def _truncate_at_cot_end(generated_text: str) -> str:
@@ -142,6 +180,16 @@ def ar2diffusion(
     use_system_prompt = original_prompt.get("use_system_prompt")
     custom_system_prompt = original_prompt.get("system_prompt")
 
+    _log_hunyuan_request_part("AR input", original_prompt)
+    _log_hunyuan_request_part(
+        "AR output",
+        {
+            "request_id": getattr(ar_output, "request_id", None),
+            "text": generated_text,
+            "cumulative_token_ids": generated_token_ids,
+        },
+    )
+
     # Prefer the AR's predicted output aspect (`<img_size_*><img_ratio_*>`
     # tail emitted by `HunyuanImage3ForCausalMM.sample` under the
     # ratio-restriction logits processor) over the carried-through
@@ -221,4 +269,5 @@ def ar2diffusion(
         if key in original_prompt:
             diffusion_input[key] = original_prompt[key]
 
+    _log_hunyuan_request_part("DiT input", diffusion_input)
     return diffusion_input

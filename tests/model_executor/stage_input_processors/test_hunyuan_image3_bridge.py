@@ -3,6 +3,7 @@
 """Unit tests for HunyuanImage3 stage input processor."""
 
 import builtins
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -53,6 +54,25 @@ def test_ar2diffusion_returns_one_request_payload_for_request_level_batching():
 
     assert isinstance(result, dict)
     assert result["prompt"] == "edit"
+
+
+def test_ar2diffusion_logs_ar_and_dit_inputs_without_image_payload(caplog: pytest.LogCaptureFixture):
+    with caplog.at_level(logging.INFO):
+        ar2diffusion(
+            [_source_output([100, 101], text="generated recaption")],
+            prompt={
+                "prompt": "edit the flower",
+                "prompt_token_ids": list(range(20)),
+                "multi_modal_data": {"image": object()},
+            },
+        )
+
+    assert "[HunyuanImage3][AR input]" in caplog.text
+    assert "[HunyuanImage3][AR output]" in caplog.text
+    assert "[HunyuanImage3][DiT input]" in caplog.text
+    assert "<image omitted>" in caplog.text
+    assert "'count': 20" not in caplog.text
+    assert '"count": 20' in caplog.text
 
 
 def test_ar2diffusion_uses_parent_output_when_companions_are_present():
