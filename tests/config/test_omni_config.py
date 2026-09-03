@@ -435,6 +435,7 @@ def test_sub_config_fields_match_rfc_scopes():
         "async_scheduling",
     }
     assert {f.name for f in fields(OmniStageConnectorConfig)} == {
+        "kv_transfer_config",
         "stage_connector",
         "output_connectors",
         "input_connectors",
