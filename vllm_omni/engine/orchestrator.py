@@ -699,7 +699,6 @@ class Orchestrator:
             request_timestamp=float(msg.request_timestamp or _time.time()),
             mm_features=getattr(prompt, "mm_features", None),
             pd_prefill_prompt=(prompt if self._pd_pair is not None and self._pd_pair[0] == stage_id else None),
-            request_artifact_dirs=set(msg.request_artifact_dirs or ()),
         )
         self.request_states[request_id] = req_state
         self._register_running_request(req_state)
