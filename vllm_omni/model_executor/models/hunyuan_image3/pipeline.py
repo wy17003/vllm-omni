@@ -51,7 +51,6 @@ HUNYUAN_IMAGE3_PIPELINE = PipelineConfig(
 
 HUNYUAN_IMAGE3_PD_PIPELINE = PipelineConfig(
     model_type="hunyuan_image3_pd",
-    default_deploy_config_name="hunyuan_image_3_moe_pd.yaml",
     model_arch=_HUNYUAN_IMAGE3_MODEL_ARCH,
     hf_architectures=(),
     stages=(

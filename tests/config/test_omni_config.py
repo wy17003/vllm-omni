@@ -72,7 +72,11 @@ def _resolve_pipeline_or_skip(model_type: str) -> PipelineConfig:
 
 def test_hunyuan_image3_pd_structured_config_projects_vllm_kv_transfer() -> None:
     pipeline = _resolve_pipeline_or_skip("hunyuan_image3_pd")
-    omni_config = VllmOmniConfig.from_registry("hunyuan_image3_pd")
+    deploy_path = _DEPLOY_DIR / "hunyuan_image_3_moe_pd.yaml"
+    omni_config = VllmOmniConfig.from_registry(
+        "hunyuan_image3_pd",
+        deploy_config_path=str(deploy_path),
+    )
 
     prefill = omni_config.stage_by_id(0)
     decode = omni_config.stage_by_id(1)
@@ -93,7 +97,7 @@ def test_hunyuan_image3_pd_structured_config_projects_vllm_kv_transfer() -> None
         "kv_connector_extra_config": {"mooncake_bootstrap_port": 25202},
     }
 
-    deploy = load_deploy_config(_DEPLOY_DIR / pipeline.default_deploy_config_name)
+    deploy = load_deploy_config(deploy_path)
     stages = merge_pipeline_deploy(pipeline, deploy)
     omega_stages = [stage.to_omegaconf() for stage in stages]
     assert [stage.pd_role for stage in stages] == [PDRole.PREFILL, PDRole.DECODE, None]
