@@ -44,6 +44,9 @@ from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 _DEPLOY_DIR = Path(__file__).parents[2] / "vllm_omni" / "deploy"
+_DEPLOY_CONFIG_OVERRIDES = {
+    "hunyuan_image3_pd": "hunyuan_image_3_moe_pd.yaml",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +59,8 @@ def _stable_test_platform(monkeypatch):
 
 
 def _load_default_deploy(model_type: str) -> DeployConfig:
-    deploy_path = _DEPLOY_DIR / f"{model_type}.yaml"
+    deploy_name = _DEPLOY_CONFIG_OVERRIDES.get(model_type, f"{model_type}.yaml")
+    deploy_path = _DEPLOY_DIR / deploy_name
     if deploy_path.exists():
         return load_deploy_config(deploy_path)
     return DeployConfig()
@@ -115,7 +119,9 @@ def test_vllm_omni_config_from_registry_matches_merge_pipeline_deploy(model_type
     legacy_deploy = _load_default_deploy(model_type)
 
     legacy_stages = merge_pipeline_deploy(pipeline, legacy_deploy)
-    omni_config = VllmOmniConfig.from_registry(model_type)
+    deploy_name = _DEPLOY_CONFIG_OVERRIDES.get(model_type)
+    deploy_config_path = str(_DEPLOY_DIR / deploy_name) if deploy_name else None
+    omni_config = VllmOmniConfig.from_registry(model_type, deploy_config_path=deploy_config_path)
 
     assert omni_config.pipeline_config is pipeline
     assert len(omni_config.stage_configs) == len(legacy_stages)

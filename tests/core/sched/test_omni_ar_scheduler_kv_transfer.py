@@ -8,9 +8,16 @@ from vllm_omni.core.sched.omni_ar_scheduler import OmniARScheduler
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
+class _HashableNamespace(SimpleNamespace):
+    """Identity-hashable request stub matching vLLM Request semantics."""
+
+    __hash__ = object.__hash__
+    __eq__ = object.__eq__
+
+
 def _make_free_request_scheduler(status: RequestStatus):
     scheduler = OmniARScheduler.__new__(OmniARScheduler)
-    request = SimpleNamespace(
+    request = _HashableNamespace(
         request_id="req",
         client_index=0,
         status=status,

@@ -535,7 +535,7 @@ async def test_pd_decode_replays_processed_prefill_prompt(orchestrator_factory) 
         assert req_state.prompt is original_prompt
         assert req_state.pd_prefill_prompt is processed_prompt
 
-        await orchestrator._forward_to_next_stage_unguarded(
+        await orchestrator._forward_to_next_stage(
             "req-pd-replay",
             0,
             SimpleNamespace(request_id="req-pd-replay"),
