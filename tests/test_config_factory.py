@@ -1502,6 +1502,11 @@ class TestPlatformOverrides:
         assert non_pd_dit.omni_kv_config["debug_fingerprint"] is True
         assert pd_dit.omni_kv_config["debug_fingerprint"] is True
 
+        pd_prefill = pd.stages[0]
+        for ar_stage in (non_pd_ar, pd_prefill, pd_decode):
+            assert ar_stage.env["VLLM_OMNI_HY3_AR_EQ_DEBUG"] == "1"
+            assert ar_stage.env["VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP"] == "100"
+
     def test_xpu_overrides(self):
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not deploy_path.exists():

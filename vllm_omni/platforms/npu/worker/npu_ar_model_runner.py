@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from collections.abc import Mapping
 from copy import copy, deepcopy
@@ -43,9 +45,16 @@ from vllm_ascend.worker.model_runner_v1 import graph_capture
 
 from vllm_omni.data_entry_keys import flatten_payload
 from vllm_omni.distributed.omni_connectors.kv_transfer_manager import OmniKVTransferManager
+from vllm_omni.distributed.omni_connectors.utils.kv_utils import get_local_tp_rank, normalize_layer_kv
 from vllm_omni.engine.serialization import request_needs_downstream_stage
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.platforms.npu.worker.npu_model_runner import OmniNPUModelRunner
+from vllm_omni.utils.debug_fingerprint import (
+    fixed_token_positions,
+    gather_paged_tensor_tokens,
+    int_sequence_fingerprint,
+    tensor_fingerprint,
+)
 from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
 
 
@@ -112,6 +121,176 @@ class NPUARModelRunner(OmniNPUModelRunner):
         # Initialize KV cache manager (preserve vllm_config fallback behavior)
         self.kv_transfer_manager = OmniKVTransferManager.from_vllm_config(self.vllm_config, self.model_config)
         self._downstream_payload_cache: dict[str, bool] = {}
+        self._hy3_ar_eq_debug = (
+            getattr(self.model_config, "model_arch", None) == "HunyuanImage3ForConditionalGeneration"
+            and os.environ.get("VLLM_OMNI_HY3_AR_EQ_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+        )
+        self._hy3_ar_input_logged: set[str] = set()
+        self._hy3_prompt_kv_logged: set[str] = set()
+
+    def _hy3_pd_role(self) -> str:
+        kv_config = getattr(self.vllm_config, "kv_transfer_config", None)
+        if kv_config is None:
+            return "non_pd"
+        if isinstance(kv_config, dict):
+            return str(kv_config.get("kv_role") or "unknown")
+        return str(getattr(kv_config, "kv_role", "unknown"))
+
+    def _maybe_log_hy3_prompt_kv(
+        self,
+        req_ids: list[str],
+        num_scheduled_tokens_np: np.ndarray,
+    ) -> None:
+        if not self._hy3_ar_eq_debug:
+            return
+
+        role = self._hy3_pd_role()
+        event = {
+            "kv_producer": "pd_prefill_post_save",
+            "kv_consumer": "pd_decode_post_load",
+            "non_pd": "non_pd_prefill_post_forward",
+        }.get(role, f"ar_{role}_post_forward")
+        block_size = int(self.cache_config.block_size)
+        block_table = self.input_batch.block_table[0].block_table.cpu
+        if callable(block_table):
+            block_table = block_table()
+
+        for req_idx, req_id in enumerate(req_ids):
+            if req_id in self._hy3_prompt_kv_logged:
+                continue
+            req_state = self.requests.get(req_id)
+            prompt_token_ids = list(getattr(req_state, "prompt_token_ids", None) or [])
+            prompt_len = len(prompt_token_ids)
+            num_computed = int(self.input_batch.num_computed_tokens_cpu[req_idx])
+            num_scheduled = int(num_scheduled_tokens_np[req_idx])
+            if prompt_len == 0 or num_computed + num_scheduled < prompt_len:
+                continue
+
+            try:
+                num_prompt_blocks = (prompt_len + block_size - 1) // block_size
+                block_ids = [int(value) for value in block_table[req_idx, :num_prompt_blocks].tolist()]
+                token_positions = fixed_token_positions(prompt_len, block_size)
+                layer_indices = sorted({0, len(self.kv_caches) // 2, len(self.kv_caches) - 1})
+                samples: list[dict[str, Any]] = []
+                for layer_idx in layer_indices:
+                    kv_pair = normalize_layer_kv(self.kv_caches[layer_idx], req_id=req_id, layer_idx=layer_idx)
+                    if kv_pair is None:
+                        continue
+                    for cache_name, cache_blocks in zip(("key", "value"), kv_pair, strict=True):
+                        selected = gather_paged_tensor_tokens(
+                            cache_blocks,
+                            block_ids=block_ids,
+                            token_positions=token_positions,
+                            block_size=block_size,
+                        )
+                        samples.append(
+                            {
+                                "layer": layer_idx,
+                                "cache": cache_name,
+                                **tensor_fingerprint(selected),
+                            }
+                        )
+
+                external_req_id = getattr(req_state, "external_req_id", None)
+                logger.info(
+                    "[HY3_AR_KV] event=%s request_id=%s external_request_id=%s tp_rank=%s "
+                    "prompt_len=%s prompt_sha256=%s num_computed_before=%s num_scheduled=%s "
+                    "block_size=%s block_ids=%s token_positions=%s samples=%s",
+                    event,
+                    req_id,
+                    external_req_id,
+                    get_local_tp_rank(),
+                    prompt_len,
+                    int_sequence_fingerprint(prompt_token_ids),
+                    num_computed,
+                    num_scheduled,
+                    block_size,
+                    json.dumps(block_ids, separators=(",", ":")),
+                    json.dumps(token_positions, separators=(",", ":")),
+                    json.dumps(samples, sort_keys=True, separators=(",", ":")),
+                )
+                self._hy3_prompt_kv_logged.add(req_id)
+            except Exception:
+                logger.exception(
+                    "[HY3_AR_KV] failed event=%s request_id=%s tp_rank=%s",
+                    event,
+                    req_id,
+                    get_local_tp_rank(),
+                )
+
+    def _maybe_log_hy3_ar_inputs(
+        self,
+        req_ids: list[str],
+        num_scheduled_tokens_np: np.ndarray,
+        input_ids: torch.Tensor,
+        positions: torch.Tensor,
+    ) -> None:
+        if not self._hy3_ar_eq_debug:
+            return
+
+        query_start_loc = self.query_start_loc.cpu
+        if callable(query_start_loc):
+            query_start_loc = query_start_loc()
+        slot_mapping = self.input_batch.block_table[0].slot_mapping.cpu
+        if callable(slot_mapping):
+            slot_mapping = slot_mapping()
+
+        for req_idx, req_id in enumerate(req_ids):
+            if req_id in self._hy3_ar_input_logged:
+                continue
+            req_state = self.requests.get(req_id)
+            prompt_token_ids = list(getattr(req_state, "prompt_token_ids", None) or [])
+            prompt_len = len(prompt_token_ids)
+            num_computed = int(self.input_batch.num_computed_tokens_cpu[req_idx])
+            num_scheduled = int(num_scheduled_tokens_np[req_idx])
+            if prompt_len == 0 or num_computed + num_scheduled < prompt_len:
+                continue
+
+            try:
+                start = int(query_start_loc[req_idx])
+                end = start + num_scheduled
+                scheduled_ids = [int(value) for value in input_ids[start:end].detach().cpu().tolist()]
+                scheduled_positions = positions[..., start:end]
+                scheduled_slots = slot_mapping[start:end]
+                position_values = (
+                    scheduled_positions.detach().cpu().tolist() if scheduled_positions.numel() <= 48 else None
+                )
+                slot_values = scheduled_slots.detach().cpu().tolist() if scheduled_slots.numel() <= 16 else None
+                output_history = list(getattr(req_state, "output_token_ids", None) or [])
+                role = self._hy3_pd_role()
+                logger.info(
+                    "[HY3_AR_INPUT] role=%s request_id=%s external_request_id=%s tp_rank=%s "
+                    "prompt_len=%s num_computed_before=%s num_scheduled=%s prompt_tail=%s "
+                    "output_history_count=%s output_history_sha256=%s scheduled_input_count=%s "
+                    "scheduled_input_sha256=%s scheduled_input_head=%s scheduled_input_tail=%s "
+                    "positions=%s position_values=%s slot_mapping=%s slot_values=%s",
+                    role,
+                    req_id,
+                    getattr(req_state, "external_req_id", None),
+                    get_local_tp_rank(),
+                    prompt_len,
+                    num_computed,
+                    num_scheduled,
+                    json.dumps(prompt_token_ids[-8:], separators=(",", ":")),
+                    len(output_history),
+                    int_sequence_fingerprint(output_history),
+                    len(scheduled_ids),
+                    int_sequence_fingerprint(scheduled_ids),
+                    json.dumps(scheduled_ids[:8], separators=(",", ":")),
+                    json.dumps(scheduled_ids[-8:], separators=(",", ":")),
+                    json.dumps(tensor_fingerprint(scheduled_positions), sort_keys=True, separators=(",", ":")),
+                    json.dumps(position_values, separators=(",", ":")),
+                    json.dumps(tensor_fingerprint(scheduled_slots), sort_keys=True, separators=(",", ":")),
+                    json.dumps(slot_values, separators=(",", ":")),
+                )
+                self._hy3_ar_input_logged.add(req_id)
+            except Exception:
+                logger.exception(
+                    "[HY3_AR_INPUT] failed role=%s request_id=%s tp_rank=%s",
+                    self._hy3_pd_role(),
+                    req_id,
+                    get_local_tp_rank(),
+                )
 
     def _make_buffer(self, *size, dtype, numpy=True):
         # Prevent ray from pinning the buffer due to large size
@@ -616,6 +795,13 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 )
             #  -------------------------------------- Omni-new -------------------------------------------------
 
+            self._maybe_log_hy3_ar_inputs(
+                req_ids[:num_reqs],
+                num_scheduled_tokens_np,
+                input_ids,
+                positions,
+            )
+
             # update global cos, sin
             update_cos_sin(positions)
 
@@ -676,6 +862,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
             hidden_states = self._model_forward(
                 num_tokens_padded, input_ids, positions, intermediate_tensors, inputs_embeds, **model_kwargs
             )
+        self._maybe_log_hy3_prompt_kv(req_ids[:num_reqs], num_scheduled_tokens_np)
         with record_function_or_nullcontext("post process"):
             #  -------------------------------------- Omni-new -------------------------------------------------
             # [Omni] Map pending ropes metadata to req_ids.
@@ -815,6 +1002,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
             model_sample = getattr(self.model, "sample", None)
             self.input_batch.update_async_output_token_ids()
             if logits is not None and callable(model_sample) and getattr(self.model, "prefer_model_sampler", False):
+                set_debug_context = getattr(self.model, "set_hy3_debug_request_context", None)
+                if callable(set_debug_context):
+                    set_debug_context(list(self.input_batch.req_ids), role=self._hy3_pd_role())
                 # Apply logit bias (min_tokens, allowed_token_ids) before
                 # the custom model sampler — the standard GPU sampler does
                 # this internally, but prefer_model_sampler bypasses it.

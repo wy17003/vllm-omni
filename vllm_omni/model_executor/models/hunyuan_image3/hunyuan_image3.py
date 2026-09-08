@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import gc
+import json
 import math
+import os
 import typing
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any, Literal, TypeAlias
@@ -93,6 +95,7 @@ from vllm.v1.sample.sampler import Sampler
 
 from vllm_omni.model_executor.models.hunyuan_image3.autoencoder_kl_3d import AutoencoderKLConv3D
 from vllm_omni.model_executor.models.hunyuan_image3.siglip2 import LightProjector, Siglip2VisionTransformer
+from vllm_omni.utils.debug_fingerprint import int_sequence_fingerprint, tensor_topk_summary
 
 logger = init_logger(__name__)
 
@@ -1610,6 +1613,18 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
 
         self._sampler: Sampler | None = None
         self._eos_token_id: int = tokenizer.eos_token_id
+        self._hy3_ar_eq_debug = os.environ.get("VLLM_OMNI_HY3_AR_EQ_DEBUG", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        try:
+            self._hy3_ar_eq_debug_max_step = int(os.environ.get("VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP", "100"))
+        except ValueError:
+            self._hy3_ar_eq_debug_max_step = 100
+        self._hy3_debug_request_ids: list[str] = []
+        self._hy3_debug_role: str | None = None
         # Lazily built on first sample() call so we can pick up logits.device
         # without guessing during init. See `sample()` for the comprehension
         # fast path that uses this.
@@ -2071,6 +2086,28 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
             self._sampler = Sampler()
 
         min_score = torch.finfo(logits.dtype).min
+        debug_rows: dict[int, dict[str, Any]] = {}
+        if self._hy3_ar_eq_debug:
+            for req_idx in range(logits.shape[0]):
+                decoded_tokens = (
+                    list(sampling_metadata.output_token_ids[req_idx])
+                    if req_idx < len(sampling_metadata.output_token_ids)
+                    else []
+                )
+                step = len(decoded_tokens)
+                if step <= self._hy3_ar_eq_debug_max_step:
+                    debug_rows[req_idx] = {
+                        "request_id": (
+                            self._hy3_debug_request_ids[req_idx] if req_idx < len(self._hy3_debug_request_ids) else None
+                        ),
+                        "role": self._hy3_debug_role,
+                        "tp_rank": get_tensor_model_parallel_rank(),
+                        "generated_count_before": step,
+                        "output_ordinal": step + 1,
+                        "history_sha256": int_sequence_fingerprint(decoded_tokens),
+                        "raw_top2": tensor_topk_summary(logits[req_idx]),
+                        "processor": "none",
+                    }
 
         if self._is_comprehension:
             # Comprehension path is stateless: we only need to mask a fixed
@@ -2086,7 +2123,11 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 )
             if self._blocked_token_ids_tensor is not None:
                 logits.index_fill_(-1, self._blocked_token_ids_tensor, min_score)
-            return self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+            for row in debug_rows.values():
+                row["processor"] = "comprehension_block_mask"
+            sampler_output = self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+            self._log_hy3_ar_debug_rows(debug_rows, logits, sampler_output)
+            return sampler_output
 
         # Generation path retains the per-request stateful logic for forced
         # stage-transition tokens and ratio-restriction.
@@ -2100,13 +2141,45 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
             if forced is not None:
                 logits[req_idx].fill_(min_score)
                 logits[req_idx, forced] = 0
+                if req_idx in debug_rows:
+                    debug_rows[req_idx]["processor"] = "forced_transition"
+                    debug_rows[req_idx]["forced_token_id"] = forced
             elif last_token == self._size_token_id:
                 self._apply_ratio_restriction(logits, req_idx, min_score)
+                if req_idx in debug_rows:
+                    debug_rows[req_idx]["processor"] = "ratio_restriction"
             elif last_token in self._all_ratio_ids:
                 logits[req_idx].fill_(min_score)
                 logits[req_idx, self._eos_token_id] = 0
+                if req_idx in debug_rows:
+                    debug_rows[req_idx]["processor"] = "forced_eos"
 
-        return self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+        sampler_output = self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+        self._log_hy3_ar_debug_rows(debug_rows, logits, sampler_output)
+        return sampler_output
+
+    def set_hy3_debug_request_context(self, req_ids: list[str], role: str | None = None) -> None:
+        if self._hy3_ar_eq_debug:
+            self._hy3_debug_request_ids = list(req_ids)
+            self._hy3_debug_role = role
+
+    def _log_hy3_ar_debug_rows(
+        self,
+        debug_rows: dict[int, dict[str, Any]],
+        processed_logits: torch.Tensor,
+        sampler_output: SamplerOutput,
+    ) -> None:
+        if not debug_rows:
+            return
+        sampled_token_ids = getattr(sampler_output, "sampled_token_ids", None)
+        for req_idx, row in debug_rows.items():
+            row["processed_top2"] = tensor_topk_summary(processed_logits[req_idx])
+            row["selected_token_id"] = None
+            if isinstance(sampled_token_ids, torch.Tensor) and req_idx < sampled_token_ids.shape[0]:
+                sampled_row = sampled_token_ids[req_idx].reshape(-1)
+                if sampled_row.numel() > 0:
+                    row["selected_token_id"] = int(sampled_row[0].item())
+            logger.info("[HY3_AR_LOGITS] %s", json.dumps(row, sort_keys=True, separators=(",", ":")))
 
     def _get_forced_token(self, decoded_tokens: list[int]) -> int | None:
         """Derive the next forced token from output history (stateless).
