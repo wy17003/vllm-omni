@@ -29,7 +29,10 @@ from vllm_omni.distributed.omni_connectors.transfer_adapter.chunk_transfer_adapt
     OmniChunkTransferAdapter,
 )
 from vllm_omni.engine import OmniEngineCoreOutput
-from vllm_omni.engine.serialization import deserialize_additional_information
+from vllm_omni.engine.serialization import (
+    deserialize_additional_information,
+    request_needs_downstream_stage,
+)
 from vllm_omni.outputs import OmniConnectorOutput
 
 logger = init_logger(__name__)
@@ -121,7 +124,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         return None
 
     def _request_omits_kv_transfer_to_next_stage(self, request: Request) -> bool:
-        """True when orchestrator will not run stage 1+ for this request (e.g. text-only).
+        """True when this stage is the request's final pipeline stage.
 
         The result is cached per request to avoid repeated deserialization of
         additional_information on every scheduler tick.
@@ -136,7 +139,11 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             result = False
         else:
             info = deserialize_additional_information(payload)
-            result = info.get("omni_final_stage_id") == 0
+            current_stage_id = getattr(self.vllm_config.model_config, "stage_id", 0)
+            result = not request_needs_downstream_stage(
+                info.get("omni_final_stage_id"),
+                current_stage_id,
+            )
 
         self._omits_kv_transfer_cache[rid] = result
         return result
@@ -150,7 +157,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         if not self.kv_transfer_criteria:
             return False
 
-        # Text-only requests finalize at stage 0; do not prefill-stop for DiT KV.
+        # Do not prefill-stop for downstream KV when this request ends here.
         if self._request_omits_kv_transfer_to_next_stage(request):
             return False
 
