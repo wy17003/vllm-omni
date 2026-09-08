@@ -1,0 +1,21 @@
+# NPU diagnostic control: full prefix checks, no KV writes.
+base_config: hunyuan_image_3_moe_pd.yaml
+stages:
+  - stage_id: 0
+    async_scheduling: false
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25201"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "check"
+      VLLM_OMNI_HY3_KV_CAUSAL_DIR: "/tmp/vllm-omni-hy3-kv-check"
+  - stage_id: 1
+    async_scheduling: false
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25202"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "check"
+      VLLM_OMNI_HY3_KV_CAUSAL_DIR: "/tmp/vllm-omni-hy3-kv-check"

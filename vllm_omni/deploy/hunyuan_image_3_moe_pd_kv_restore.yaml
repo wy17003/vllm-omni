@@ -1,0 +1,19 @@
+# NPU causal intervention: restore every layer/rank's original prompt-tail K/V.
+base_config: hunyuan_image_3_moe_pd_kv_check.yaml
+stages:
+  - stage_id: 0
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25201"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "restore"
+      VLLM_OMNI_HY3_KV_CAUSAL_DIR: "/tmp/vllm-omni-hy3-kv-restore"
+  - stage_id: 1
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25202"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "restore"
+      VLLM_OMNI_HY3_KV_CAUSAL_DIR: "/tmp/vllm-omni-hy3-kv-restore"

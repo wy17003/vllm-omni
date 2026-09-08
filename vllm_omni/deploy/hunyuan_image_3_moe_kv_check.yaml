@@ -1,0 +1,10 @@
+# Non-PD baseline: log all prompt-prefix/tail hashes without changing KV.
+base_config: hunyuan_image_3_moe.yaml
+stages:
+  - stage_id: 0
+    async_scheduling: false
+    env:
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "check"
+      VLLM_OMNI_HY3_KV_CAUSAL_DIR: "/tmp/vllm-omni-hy3-kv-non-pd"

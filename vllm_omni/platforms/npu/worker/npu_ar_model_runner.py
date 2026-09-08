@@ -55,6 +55,7 @@ from vllm_omni.utils.debug_fingerprint import (
     int_sequence_fingerprint,
     tensor_fingerprint,
 )
+from vllm_omni.utils.hunyuan_kv_causal import HunyuanKVCausalProbe
 from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
 
 
@@ -129,6 +130,61 @@ class NPUARModelRunner(OmniNPUModelRunner):
         )
         self._hy3_ar_input_logged: set[str] = set()
         self._hy3_prompt_kv_logged: set[str] = set()
+        self._hy3_kv_causal = None
+        causal_mode = os.environ.get("VLLM_OMNI_HY3_KV_CAUSAL_MODE", "off").lower()
+        if causal_mode != "off":
+            parallel = self.vllm_config.parallel_config
+            if (
+                not self._hy3_ar_eq_debug
+                or self.speculative_config is not None
+                or parallel.pipeline_parallel_size != 1
+                or getattr(parallel, "decode_context_parallel_size", 1) != 1
+                or getattr(parallel, "prefill_context_parallel_size", 1) != 1
+                or getattr(parallel, "enable_expert_parallel", False)
+                or self.use_async_scheduling
+            ):
+                raise RuntimeError(
+                    "[HY3_KV_CAUSAL] Requires Hunyuan AR EQ debug, synchronous TP-only execution, "
+                    "PP/CP=1, no expert parallelism or speculative decoding"
+                )
+            self._hy3_kv_causal = HunyuanKVCausalProbe(
+                causal_mode,
+                os.environ.get("VLLM_OMNI_HY3_KV_CAUSAL_DIR", ""),
+                self._hy3_pd_role(),
+                get_local_tp_rank(),
+                parallel.tensor_parallel_size,
+            )
+            self._hy3_kv_causal.logger = logger
+
+    def _maybe_run_hy3_kv_causal(self, req_ids: list[str], scheduled: np.ndarray) -> None:
+        probe = self._hy3_kv_causal
+        if probe is None:
+            return
+        if len(req_ids) != 1 or len(self.kv_cache_config.kv_cache_groups) != 1:
+            raise RuntimeError("[HY3_KV_CAUSAL] Requires batch=1 and a single KV cache group")
+        req_id = req_ids[0]
+        if req_id in probe.done:
+            return
+        prompt_ids = list(self.requests[req_id].prompt_token_ids or [])
+        block_size = int(self.cache_config.block_size)
+        block_table = self.input_batch.block_table[0].block_table.cpu
+        if callable(block_table):
+            block_table = block_table()
+        num_blocks = (len(prompt_ids) + block_size - 1) // block_size
+        layers = [normalize_layer_kv(cache, req_id=req_id, layer_idx=i) for i, cache in enumerate(self.kv_caches)]
+        probe.after_forward(
+            req_id,
+            prompt_ids,
+            int(self.input_batch.num_computed_tokens_cpu[0]),
+            int(scheduled[0]),
+            layers,
+            [int(b) for b in block_table[0, :num_blocks].tolist()],
+            block_size,
+        )
+
+    def _maybe_check_hy3_causal_sample(self, sampler_output) -> None:
+        if self._hy3_kv_causal is not None:
+            self._hy3_kv_causal.after_sample(list(self.input_batch.req_ids), sampler_output.sampled_token_ids)
 
     def _hy3_pd_role(self) -> str:
         kv_config = getattr(self.vllm_config, "kv_transfer_config", None)
@@ -607,6 +663,8 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 deferred_state_corrections_fn = self._update_states(scheduler_output)
 
                 #  -------------------------------------- Omni-new -------------------------------------------------
+                if self._hy3_kv_causal is not None:
+                    self._hy3_kv_causal.finish(scheduler_output.finished_req_ids)
                 if self._hy3_ar_eq_debug:
                     self._hy3_ar_input_logged.difference_update(scheduler_output.finished_req_ids)
                     self._hy3_prompt_kv_logged.difference_update(scheduler_output.finished_req_ids)
@@ -885,6 +943,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 num_tokens_padded, input_ids, positions, intermediate_tensors, inputs_embeds, **model_kwargs
             )
         self._maybe_log_hy3_prompt_kv(req_ids[:num_reqs], num_scheduled_tokens_np)
+        # The consumer has just recomputed the prompt tail. Restore only its
+        # cached K/V; leave this forward's hidden states and first logits intact.
+        self._maybe_run_hy3_kv_causal(req_ids[:num_reqs], num_scheduled_tokens_np)
         with record_function_or_nullcontext("post process"):
             #  -------------------------------------- Omni-new -------------------------------------------------
             # [Omni] Map pending ropes metadata to req_ids.
@@ -1042,11 +1103,14 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     self._sampling_metadata_for_model_sampler(sampling_metadata),
                 )
                 if sampler_output is not None:
+                    self._maybe_check_hy3_causal_sample(sampler_output)
                     return sampler_output
-            return self.sampler(
+            sampler_output = self.sampler(
                 logits=logits,
                 sampling_metadata=sampling_metadata,
             )
+            self._maybe_check_hy3_causal_sample(sampler_output)
+            return sampler_output
 
         return super()._sample(logits, spec_decode_metadata)
 
