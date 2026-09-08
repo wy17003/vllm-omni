@@ -105,6 +105,17 @@ class StageEngineCoreProc(EngineCoreProc):
             set_death_signal(signal.SIGTERM)
             set_process_title(f"StageEngineCoreProc_{stage_label}_replica{omni_replica_id}_DP{dp_rank}")
             decorate_logs()
+
+            logger.info(
+                "[StageEngineCoreProc][runtime-env] "
+                "stage=%s pid=%s VLLM_HOST_IP=%r "
+                "VLLM_MOONCAKE_BOOTSTRAP_PORT=%r",
+                omni_stage_id,
+                os.getpid(),
+                os.getenv("VLLM_HOST_IP"),
+                os.getenv("VLLM_MOONCAKE_BOOTSTRAP_PORT"),
+            )
+
             # Workaround for flashinfer/jit-cache version mismatch in CI.
             # The parent process handles this gracefully via ring_globals.py,
             # but the subprocess hits an unprotected import in TopKTopPSampler.

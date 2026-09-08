@@ -807,6 +807,12 @@ def run_headless(args: TrackingNamespace) -> None:
         raise ValueError(
             f"No stage config found for stage_id={stage_id}. Available stage ids: {[c.stage_id for c in stage_configs]}"
         )
+    
+    logger.info(
+        "[Headless] stage=%s resolved runtime=%s",
+        stage_id,
+        getattr(stage_cfg, "runtime", None),
+    )
 
     prepare_engine_environment()
     per_replica_devices = get_headless_replica_devices(stage_cfg, stage_id, omni_dp_size_local)
