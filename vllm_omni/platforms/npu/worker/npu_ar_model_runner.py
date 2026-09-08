@@ -235,17 +235,11 @@ class NPUARModelRunner(OmniNPUModelRunner):
         self,
         req_ids: list[str],
         num_scheduled_tokens_np: np.ndarray,
-        input_ids: torch.Tensor,
+        input_ids: torch.Tensor | None,
         positions: torch.Tensor,
     ) -> None:
         if not self._hy3_ar_eq_debug:
             return
-
-        query_start_loc = self.query_start_loc.cpu
-        if callable(query_start_loc):
-            query_start_loc = query_start_loc()
-        # Read the device mapping consumed by attention; the host copy can be stale.
-        slot_mapping = self.input_batch.block_table[0].slot_mapping.gpu
 
         for req_idx, req_id in enumerate(req_ids):
             if req_id in self._hy3_ar_input_logged:
@@ -259,9 +253,19 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 continue
 
             try:
+                query_start_loc = self.query_start_loc.cpu
+                if callable(query_start_loc):
+                    query_start_loc = query_start_loc()
+                # With inputs_embeds, the forward input_ids may legitimately be
+                # None. The runner still holds the scheduled token IDs; these
+                # identify the tokens, not the actual embedding tensor values.
+                diagnostic_ids = input_ids if input_ids is not None else self.input_ids.gpu
+                input_ids_source = "forward" if input_ids is not None else "runner_buffer"
+                # Read the mapping consumed by attention; the host copy can be stale.
+                slot_mapping = self.input_batch.block_table[0].slot_mapping.gpu
                 start = int(query_start_loc[req_idx])
                 end = start + num_scheduled
-                scheduled_ids = [int(value) for value in input_ids[start:end].detach().cpu().tolist()]
+                scheduled_ids = [int(value) for value in diagnostic_ids[start:end].detach().cpu().tolist()]
                 scheduled_positions = positions[..., start:end]
                 scheduled_slots = slot_mapping[start:end]
                 # Always include the tail so full prefill and prompt-tail recompute
@@ -274,7 +278,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     "[HY3_AR_INPUT] role=%s request_id=%s external_request_id=%s tp_rank=%s "
                     "prompt_len=%s num_computed_before=%s num_scheduled=%s prompt_tail=%s "
                     "output_history_count=%s output_history_sha256=%s scheduled_input_count=%s "
-                    "scheduled_input_sha256=%s scheduled_input_head=%s scheduled_input_tail=%s "
+                    "input_ids_source=%s scheduled_input_sha256=%s scheduled_input_head=%s scheduled_input_tail=%s "
                     "positions=%s position_tail_values=%s slot_mapping=%s slot_tail_values=%s",
                     role,
                     req_id,
@@ -287,6 +291,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     len(output_history),
                     int_sequence_fingerprint(output_history),
                     len(scheduled_ids),
+                    input_ids_source,
                     int_sequence_fingerprint(scheduled_ids),
                     json.dumps(scheduled_ids[:8], separators=(",", ":")),
                     json.dumps(scheduled_ids[-8:], separators=(",", ":")),
@@ -295,7 +300,6 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     json.dumps(tensor_fingerprint(scheduled_slots), sort_keys=True, separators=(",", ":")),
                     json.dumps(slot_values, separators=(",", ":")),
                 )
-                self._hy3_ar_input_logged.add(req_id)
             except Exception:
                 logger.exception(
                     "[HY3_AR_INPUT] failed role=%s request_id=%s tp_rank=%s",
@@ -303,6 +307,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     req_id,
                     get_local_tp_rank(),
                 )
+            finally:
+                # A failed diagnostic must not retry and flood every decode step.
+                self._hy3_ar_input_logged.add(req_id)
 
     def _make_buffer(self, *size, dtype, numpy=True):
         # Prevent ray from pinning the buffer due to large size
@@ -600,6 +607,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 deferred_state_corrections_fn = self._update_states(scheduler_output)
 
                 #  -------------------------------------- Omni-new -------------------------------------------------
+                if self._hy3_ar_eq_debug:
+                    self._hy3_ar_input_logged.difference_update(scheduler_output.finished_req_ids)
+                    self._hy3_prompt_kv_logged.difference_update(scheduler_output.finished_req_ids)
                 if scheduler_output.finished_req_ids and hasattr(self.model, "on_requests_finished"):
                     self.model.on_requests_finished(scheduler_output.finished_req_ids)
                 #  -------------------------------------- Omni-new -------------------------------------------------
