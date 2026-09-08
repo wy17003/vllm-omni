@@ -2101,6 +2101,7 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                             self._hy3_debug_request_ids[req_idx] if req_idx < len(self._hy3_debug_request_ids) else None
                         ),
                         "role": self._hy3_debug_role,
+                        "logits_dtype": str(logits.dtype),
                         "tp_rank": get_tensor_model_parallel_rank(),
                         "generated_count_before": step,
                         "output_ordinal": step + 1,
@@ -2125,6 +2126,8 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 logits.index_fill_(-1, self._blocked_token_ids_tensor, min_score)
             for row in debug_rows.values():
                 row["processor"] = "comprehension_block_mask"
+            for req_idx, row in debug_rows.items():
+                row["processed_top2"] = tensor_topk_summary(logits[req_idx])
             sampler_output = self._sampler(logits=logits, sampling_metadata=sampling_metadata)
             self._log_hy3_ar_debug_rows(debug_rows, logits, sampler_output)
             return sampler_output
@@ -2154,6 +2157,8 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 if req_idx in debug_rows:
                     debug_rows[req_idx]["processor"] = "forced_eos"
 
+        for req_idx, row in debug_rows.items():
+            row["processed_top2"] = tensor_topk_summary(logits[req_idx])
         sampler_output = self._sampler(logits=logits, sampling_metadata=sampling_metadata)
         self._log_hy3_ar_debug_rows(debug_rows, logits, sampler_output)
         return sampler_output
@@ -2173,7 +2178,7 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
             return
         sampled_token_ids = getattr(sampler_output, "sampled_token_ids", None)
         for req_idx, row in debug_rows.items():
-            row["processed_top2"] = tensor_topk_summary(processed_logits[req_idx])
+            row["post_sampler_top2"] = tensor_topk_summary(processed_logits[req_idx])
             row["selected_token_id"] = None
             if isinstance(sampled_token_ids, torch.Tensor) and req_idx < sampled_token_ids.shape[0]:
                 sampled_row = sampled_token_ids[req_idx].reshape(-1)

@@ -122,7 +122,9 @@ class NPUARModelRunner(OmniNPUModelRunner):
         self.kv_transfer_manager = OmniKVTransferManager.from_vllm_config(self.vllm_config, self.model_config)
         self._downstream_payload_cache: dict[str, bool] = {}
         self._hy3_ar_eq_debug = (
-            getattr(self.model_config, "model_arch", None) == "HunyuanImage3ForConditionalGeneration"
+            # Runtime config uses the registry key, not necessarily the Python class name.
+            getattr(self.model_config, "model_arch", None)
+            in {"HunyuanImage3ForCausalMM", "HunyuanImage3ForConditionalGeneration"}
             and os.environ.get("VLLM_OMNI_HY3_AR_EQ_DEBUG", "").lower() in {"1", "true", "yes", "on"}
         )
         self._hy3_ar_input_logged: set[str] = set()
@@ -182,12 +184,23 @@ class NPUARModelRunner(OmniNPUModelRunner):
                             block_ids=block_ids,
                             token_positions=token_positions,
                             block_size=block_size,
-                        )
+                        ).cpu()
                         samples.append(
                             {
                                 "layer": layer_idx,
                                 "cache": cache_name,
+                                "cache_shape": list(cache_blocks.shape),
                                 **tensor_fingerprint(selected),
+                                # A combined digest cannot distinguish transferred prefix
+                                # rows from prompt-tail rows recomputed by the consumer.
+                                "tokens": [
+                                    {
+                                        "position": position,
+                                        "written_this_forward": num_computed <= position < num_computed + num_scheduled,
+                                        **tensor_fingerprint(selected[index]),
+                                    }
+                                    for index, position in enumerate(token_positions)
+                                ],
                             }
                         )
 
@@ -231,9 +244,8 @@ class NPUARModelRunner(OmniNPUModelRunner):
         query_start_loc = self.query_start_loc.cpu
         if callable(query_start_loc):
             query_start_loc = query_start_loc()
-        slot_mapping = self.input_batch.block_table[0].slot_mapping.cpu
-        if callable(slot_mapping):
-            slot_mapping = slot_mapping()
+        # Read the device mapping consumed by attention; the host copy can be stale.
+        slot_mapping = self.input_batch.block_table[0].slot_mapping.gpu
 
         for req_idx, req_id in enumerate(req_ids):
             if req_id in self._hy3_ar_input_logged:
@@ -252,10 +264,10 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 scheduled_ids = [int(value) for value in input_ids[start:end].detach().cpu().tolist()]
                 scheduled_positions = positions[..., start:end]
                 scheduled_slots = slot_mapping[start:end]
-                position_values = (
-                    scheduled_positions.detach().cpu().tolist() if scheduled_positions.numel() <= 48 else None
-                )
-                slot_values = scheduled_slots.detach().cpu().tolist() if scheduled_slots.numel() <= 16 else None
+                # Always include the tail so full prefill and prompt-tail recompute
+                # can be compared even though their query lengths differ.
+                position_values = scheduled_positions[..., -8:].detach().cpu().tolist()
+                slot_values = scheduled_slots[-8:].detach().cpu().tolist()
                 output_history = list(getattr(req_state, "output_token_ids", None) or [])
                 role = self._hy3_pd_role()
                 logger.info(
@@ -263,7 +275,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
                     "prompt_len=%s num_computed_before=%s num_scheduled=%s prompt_tail=%s "
                     "output_history_count=%s output_history_sha256=%s scheduled_input_count=%s "
                     "scheduled_input_sha256=%s scheduled_input_head=%s scheduled_input_tail=%s "
-                    "positions=%s position_values=%s slot_mapping=%s slot_values=%s",
+                    "positions=%s position_tail_values=%s slot_mapping=%s slot_tail_values=%s",
                     role,
                     req_id,
                     getattr(req_state, "external_req_id", None),
