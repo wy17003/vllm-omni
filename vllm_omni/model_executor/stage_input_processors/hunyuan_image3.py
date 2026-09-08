@@ -12,6 +12,7 @@ signature pattern as glm_image.ar2diffusion.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any
@@ -28,6 +29,7 @@ from vllm_omni.diffusion.models.hunyuan_image3.prompt_utils import (
     HUNYUAN_IMAGE3_SPECIAL_TOKEN_IDS,
 )
 from vllm_omni.inputs.data import OmniTokensPrompt
+from vllm_omni.utils.debug_fingerprint import int_sequence_fingerprint, text_fingerprint
 
 logger = init_logger(__name__)
 
@@ -114,7 +116,7 @@ def ar2diffusion(
 
     for i, ar_output in enumerate(ar_outputs):
         output = ar_output.outputs[0]
-        generated_token_ids = output.cumulative_token_ids
+        generated_token_ids = [int(token_id) for token_id in output.cumulative_token_ids]
         # Prefer cumulative_text, fallback to text if aggregation dropped it
         generated_text = getattr(output, "cumulative_text", None) or getattr(output, "text", "") or ""
 
@@ -164,6 +166,34 @@ def ar2diffusion(
                 )
 
         cot_text_for_dit = _truncate_at_cot_end(generated_text)
+        request_id = getattr(ar_output, "request_id", f"output-index-{i}")
+        prompt_token_ids = getattr(ar_output, "prompt_token_ids", None)
+        normalized_prompt_ids = (
+            [int(token_id) for token_id in prompt_token_ids] if prompt_token_ids is not None else None
+        )
+
+        logger.info(
+            "[HY3_EQ] ar request_id=%s prompt_token_count=%s prompt_token_sha256=%s prompt_token_ids=%s",
+            request_id,
+            len(normalized_prompt_ids) if normalized_prompt_ids is not None else None,
+            int_sequence_fingerprint(normalized_prompt_ids) if normalized_prompt_ids is not None else None,
+            normalized_prompt_ids,
+        )
+        logger.info(
+            "[HY3_EQ] ar request_id=%s output_token_count=%s output_token_sha256=%s "
+            "output_token_ids=%s generated_text_sha256=%s cot_text_sha256=%s ratio_index=%s "
+            "target_height=%s target_width=%s ar_generated_text=%s",
+            request_id,
+            len(generated_token_ids),
+            int_sequence_fingerprint(generated_token_ids),
+            generated_token_ids,
+            text_fingerprint(generated_text),
+            text_fingerprint(cot_text_for_dit),
+            ratio_idx,
+            height,
+            width,
+            json.dumps(cot_text_for_dit, ensure_ascii=False),
+        )
 
         logger.info(
             "[ar2diffusion] Request %d: AR generated %d tokens, text length=%d, "
@@ -183,6 +213,7 @@ def ar2diffusion(
             "width": width,
             "extra": {
                 "ar_generated_text": cot_text_for_dit,
+                "ar_ratio_index": ratio_idx,
             },
         }
 

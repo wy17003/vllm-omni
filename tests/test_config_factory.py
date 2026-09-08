@@ -1463,6 +1463,45 @@ class TestPlatformOverrides:
         # Stage 2 unaffected fields stay at base
         assert deploy.stages[2].enforce_eager is False
 
+    def test_hunyuan_image3_pd_and_non_pd_npu_equivalence_settings(self):
+        deploy_dir = Path(__file__).parent.parent / "vllm_omni" / "deploy"
+        non_pd = _apply_platform_overrides(load_deploy_config(deploy_dir / "hunyuan_image_3_moe.yaml"), platform="npu")
+        pd = _apply_platform_overrides(load_deploy_config(deploy_dir / "hunyuan_image_3_moe_pd.yaml"), platform="npu")
+
+        assert non_pd.enable_prefix_caching is pd.enable_prefix_caching is False
+        assert non_pd.enable_chunked_prefill is pd.enable_chunked_prefill is True
+
+        non_pd_ar, non_pd_dit = non_pd.stages
+        pd_decode, pd_dit = pd.stages[1:]
+        for field_name in (
+            "devices",
+            "tensor_parallel_size",
+            "gpu_memory_utilization",
+            "max_num_seqs",
+            "max_num_batched_tokens",
+            "enforce_eager",
+            "hf_overrides",
+            "default_sampling_params",
+        ):
+            assert getattr(non_pd_ar, field_name) == getattr(pd_decode, field_name)
+
+        for field_name in (
+            "devices",
+            "gpu_memory_utilization",
+            "max_num_seqs",
+            "max_num_batched_tokens",
+            "enforce_eager",
+            "distributed_executor_backend",
+            "parallel_config",
+            "default_sampling_params",
+        ):
+            assert getattr(non_pd_dit, field_name) == getattr(pd_dit, field_name)
+
+        assert non_pd_ar.omni_kv_config["debug_fingerprint"] is True
+        assert pd_decode.omni_kv_config["debug_fingerprint"] is True
+        assert non_pd_dit.omni_kv_config["debug_fingerprint"] is True
+        assert pd_dit.omni_kv_config["debug_fingerprint"] is True
+
     def test_xpu_overrides(self):
         deploy_path = Path(__file__).parent.parent / "vllm_omni" / "deploy" / "qwen3_omni_moe.yaml"
         if not deploy_path.exists():

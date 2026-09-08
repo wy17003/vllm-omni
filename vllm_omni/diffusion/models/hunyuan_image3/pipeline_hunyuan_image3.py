@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import copy
+import json
 import logging
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, ClassVar
@@ -31,6 +32,7 @@ from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import (
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.inputs.data import OmniTextPrompt
 from vllm_omni.model_executor.models.hunyuan_image3.siglip2 import Siglip2VisionTransformer
+from vllm_omni.utils.debug_fingerprint import bytes_fingerprint, tensor_fingerprint, text_fingerprint
 
 from .hunyuan_image3_tokenizer import TokenizerEncodeOutput, TokenizerWrapper
 from .hunyuan_image3_transformer import (
@@ -69,6 +71,36 @@ _STEP_OUTPUT_SIZE = "hunyuan_output_size"
 _STEP_COT_TEXT_LIST = "hunyuan_cot_text_list"
 _STEP_AR_KV = "hunyuan_ar_kv"
 _STEP_PROMPT_KV = "hunyuan_prompt_kv"
+
+
+def _selected_ar_kv_fingerprints(ar_kv_data: dict[int, dict[str, torch.Tensor]]) -> list[dict[str, Any]]:
+    layer_indices = sorted(ar_kv_data)
+    if not layer_indices:
+        return []
+    selected = sorted({layer_indices[0], layer_indices[len(layer_indices) // 2], layer_indices[-1]})
+    samples = []
+    for layer_idx in selected:
+        layer = ar_kv_data[layer_idx]
+        for cache_name in ("key", "value"):
+            tensor = layer.get(cache_name)
+            if isinstance(tensor, torch.Tensor):
+                samples.append(
+                    {
+                        "layer": layer_idx,
+                        "cache": cache_name,
+                        **tensor_fingerprint(tensor, sample_count=256),
+                    }
+                )
+    return samples
+
+
+def _generator_initial_seeds(generator: Any) -> list[int | None]:
+    generators = generator if isinstance(generator, list) else [generator]
+    seeds = []
+    for item in generators:
+        initial_seed = getattr(item, "initial_seed", None)
+        seeds.append(int(initial_seed()) if callable(initial_seed) else None)
+    return seeds
 
 
 def default(val, d):
@@ -1855,6 +1887,10 @@ class HunyuanImage3Pipeline(
             if any(text is not None for text in cot_text_list)
             else None
         )
+        ratio_indices = [
+            prompt_item.get("extra", {}).get("ar_ratio_index") if isinstance(prompt_item, dict) else None
+            for prompt_item in (state.prompts or [])
+        ]
 
         height = sampling.height or 1024
         width = sampling.width or 1024
@@ -1879,6 +1915,7 @@ class HunyuanImage3Pipeline(
             bot_task=tokenizer_bot_task,
         )
         model_kwargs.update(self._extract_ar_kv_from_sampling(sampling))
+        ar_kv_data = model_kwargs.get("ar_kv_data") or {}
         model_kwargs["use_cache"] = False
 
         input_ids = model_kwargs.pop("input_ids")
@@ -1935,6 +1972,38 @@ class HunyuanImage3Pipeline(
             device=self.device,
         )
         model_kwargs["ar_kv_reuse_len"] = ar_kv_reuse_len
+
+        debug_fingerprint = bool(
+            (getattr(self.od_config, "omni_kv_config", None) or {}).get("debug_fingerprint", False)
+        )
+        if debug_fingerprint:
+            try:
+                cot_payload = [text if text is not None else "" for text in cot_text_list]
+                logger.info(
+                    "[HY3_EQ] dit_input request_id=%s seed=%s generator_initial_seeds=%s ratio_indices=%s "
+                    "target_height=%s target_width=%s ar_kv_reuse_len=%s ar_generated_text=%s "
+                    "ar_generated_text_sha256=%s normalized_cot_text=%s normalized_cot_text_sha256=%s "
+                    "initial_latent=%s received_kv=%s",
+                    state.request_id,
+                    sampling.seed,
+                    _generator_initial_seeds(model_kwargs["generator"]),
+                    ratio_indices,
+                    target_height,
+                    target_width,
+                    ar_kv_reuse_len,
+                    json.dumps(cot_text_list, ensure_ascii=False),
+                    [text_fingerprint(text) for text in cot_payload],
+                    json.dumps(cot_text, ensure_ascii=False),
+                    [text_fingerprint(text) for text in (cot_text or [])],
+                    json.dumps(tensor_fingerprint(latents), sort_keys=True, separators=(",", ":")),
+                    json.dumps(
+                        _selected_ar_kv_fingerprints(ar_kv_data),
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                )
+            except Exception:
+                logger.exception("[HY3_EQ] failed to fingerprint DiT input request_id=%s", state.request_id)
 
         state.latents = latents
         state.timesteps = timesteps
@@ -2204,6 +2273,18 @@ class HunyuanImage3Pipeline(
         output_type = kwargs.get("output_type", "pil")
         generator = state.extra.get(_STEP_GENERATOR)
         latents = state.latents
+        debug_fingerprint = bool(
+            (getattr(self.od_config, "omni_kv_config", None) or {}).get("debug_fingerprint", False)
+        )
+        if debug_fingerprint:
+            try:
+                logger.info(
+                    "[HY3_EQ] dit_output request_id=%s final_latent=%s",
+                    state.request_id,
+                    json.dumps(tensor_fingerprint(latents), sort_keys=True, separators=(",", ":")),
+                )
+            except Exception:
+                logger.exception("[HY3_EQ] failed to fingerprint final latent request_id=%s", state.request_id)
         if output_type == "latent":
             return DiffusionOutput(
                 output=latents,
@@ -2228,6 +2309,44 @@ class HunyuanImage3Pipeline(
             output_type=output_type,
             do_denormalize=[True] * image.shape[0],
         )
+        if debug_fingerprint:
+            try:
+                image_fingerprints = []
+                for output_index, output_image in enumerate(image):
+                    if isinstance(output_image, PILImage.Image):
+                        image_fingerprints.append(
+                            {
+                                "index": output_index,
+                                "type": "pil",
+                                "mode": output_image.mode,
+                                "size": list(output_image.size),
+                                "sha256": bytes_fingerprint(output_image.tobytes()),
+                            }
+                        )
+                    elif isinstance(output_image, torch.Tensor):
+                        image_fingerprints.append(
+                            {"index": output_index, "type": "tensor", **tensor_fingerprint(output_image)}
+                        )
+                    elif isinstance(output_image, np.ndarray):
+                        array = np.ascontiguousarray(output_image)
+                        image_fingerprints.append(
+                            {
+                                "index": output_index,
+                                "type": "numpy",
+                                "shape": list(array.shape),
+                                "dtype": str(array.dtype),
+                                "sha256": bytes_fingerprint(array.tobytes()),
+                            }
+                        )
+                    else:
+                        image_fingerprints.append({"index": output_index, "type": type(output_image).__name__})
+                logger.info(
+                    "[HY3_EQ] image request_id=%s outputs=%s",
+                    state.request_id,
+                    json.dumps(image_fingerprints, sort_keys=True, separators=(",", ":")),
+                )
+            except Exception:
+                logger.exception("[HY3_EQ] failed to fingerprint image request_id=%s", state.request_id)
 
         cot_text_list = state.extra.get(_STEP_COT_TEXT_LIST) or []
         custom_output = {}

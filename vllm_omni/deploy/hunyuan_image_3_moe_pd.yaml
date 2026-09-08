@@ -76,6 +76,7 @@ stages:
         mooncake_bootstrap_port: 25202
     omni_kv_config:
       need_send_cache: true
+      debug_fingerprint: true
     output_connectors:
       to_stage_2: shared_memory_connector
     default_sampling_params:
@@ -94,6 +95,7 @@ stages:
     max_num_seqs: 1
     omni_kv_config:
       need_recv_cache: true
+      debug_fingerprint: true
       enable_kv_async_prefetch: true
       kv_prefetch_min_free_mem_ratio: 0.2
     parallel_config:

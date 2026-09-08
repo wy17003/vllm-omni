@@ -16,6 +16,7 @@ from vllm.logger import init_logger
 
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.platforms import current_omni_platform
+from vllm_omni.utils.debug_fingerprint import tensor_fingerprint
 
 from .factory import OmniConnectorFactory
 from .utils.config import TRANSFER_ENGINE_CONNECTOR_NAMES, ConnectorSpec
@@ -133,6 +134,7 @@ class OmniKVCacheConfig:
     to_tp: int = 1
     enable_kv_async_prefetch: bool = False
     kv_prefetch_min_free_mem_ratio: float = 0.0
+    debug_fingerprint: bool = False
 
 
 @dataclass
@@ -421,6 +423,45 @@ class OmniKVTransferManager:
             self._topo_config = self._build_topo_config()
         return self._topo_config
 
+    def _log_kv_fingerprints(self, event: str, request_id: str, data: Any) -> None:
+        if not self.config.debug_fingerprint:
+            return
+        try:
+            if isinstance(data, KVCacheTransferData):
+                layer_blocks = data.layer_blocks
+                metadata = data.metadata
+            else:
+                layer_blocks = data.get("layer_blocks", {})
+                metadata = data.get("metadata", {})
+
+            key_cache = layer_blocks.get("key_cache", [])
+            value_cache = layer_blocks.get("value_cache", [])
+            num_layers = max(len(key_cache), len(value_cache))
+            layer_indices = sorted({0, num_layers // 2, num_layers - 1}) if num_layers else []
+            samples = []
+            for layer_idx in layer_indices:
+                for cache_name, cache in (("key", key_cache), ("value", value_cache)):
+                    if layer_idx >= len(cache) or not isinstance(cache[layer_idx], torch.Tensor):
+                        continue
+                    samples.append(
+                        {
+                            "layer": layer_idx,
+                            "cache": cache_name,
+                            **tensor_fingerprint(cache[layer_idx], sample_count=256),
+                        }
+                    )
+            logger.info(
+                "[HY3_EQ] kv event=%s request_id=%s tp_rank=%s seq_len=%s num_layers=%s samples=%s",
+                event,
+                request_id,
+                get_local_tp_rank(),
+                metadata.get("seq_len"),
+                num_layers,
+                json.dumps(samples, sort_keys=True, separators=(",", ":")),
+            )
+        except Exception:
+            logger.exception("[HY3_EQ] failed to fingerprint KV event=%s request_id=%s", event, request_id)
+
     # ------------------------------------------------------------------ #
     #  Factory helpers
     # ------------------------------------------------------------------ #
@@ -449,6 +490,7 @@ class OmniKVTransferManager:
                 to_tp=int(rank_mapping.get("to_tp", 1)),
                 enable_kv_async_prefetch=async_prefetch,
                 kv_prefetch_min_free_mem_ratio=cfg.get("kv_prefetch_min_free_mem_ratio", 0.0),
+                debug_fingerprint=cfg.get("debug_fingerprint", False),
             ),
             async_prefetch=async_prefetch,
         )
@@ -967,6 +1009,7 @@ class OmniKVTransferManager:
                 if kv_data:
                     # Resolve global request ID if available
                     transfer_req_id = request_id_resolver(req_id) if request_id_resolver else req_id
+                    self._log_kv_fingerprints("send", transfer_req_id, kv_data)
 
                     # Transfer to downstream stage via connector
                     self._transfer_kv_cache(kv_data, transfer_req_id)
@@ -1480,6 +1523,7 @@ class OmniKVTransferManager:
                         elapsed,
                         link_ms,
                     )
+                    self._log_kv_fingerprints("receive", request_id, data)
                     return data, total_size
 
                 if time.time() - start_time > timeout:

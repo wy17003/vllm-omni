@@ -120,6 +120,7 @@ from vllm_omni.errors import OmniClientError
 from vllm_omni.lora.request import LoRARequest
 from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.utils.audio import audio_chunk_pcm_bytes, audio_chunk_sample_rate
+from vllm_omni.utils.debug_fingerprint import int_sequence_fingerprint
 
 logger = init_logger(__name__)
 
@@ -3007,6 +3008,39 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 sampling_params_list = [gen_params]
 
             sampling_params_list = coerce_param_message_types(sampling_params_list, stream)
+            prompt_token_ids = engine_prompt.get("prompt_token_ids") if isinstance(engine_prompt, dict) else None
+            if prompt_token_ids is not None:
+                normalized_prompt_ids = [int(token_id) for token_id in prompt_token_ids]
+                logger.info(
+                    "[HY3_EQ] request request_id=%s prompt_token_count=%s prompt_token_sha256=%s prompt_token_ids=%s",
+                    request_id,
+                    len(normalized_prompt_ids),
+                    int_sequence_fingerprint(normalized_prompt_ids),
+                    normalized_prompt_ids,
+                )
+                stage_sampling = []
+                for stage_index, params in enumerate(sampling_params_list):
+                    stage_sampling.append(
+                        {
+                            "stage": stage_index,
+                            "type": get_stage_type(stage_configs[stage_index])
+                            if stage_index < len(stage_configs)
+                            else None,
+                            "temperature": getattr(params, "temperature", None),
+                            "top_p": getattr(params, "top_p", None),
+                            "top_k": getattr(params, "top_k", None),
+                            "max_tokens": getattr(params, "max_tokens", None),
+                            "seed": getattr(params, "seed", None),
+                            "stop_token_ids": getattr(params, "stop_token_ids", None),
+                            "num_inference_steps": getattr(params, "num_inference_steps", None),
+                            "guidance_scale": getattr(params, "guidance_scale", None),
+                        }
+                    )
+                logger.info(
+                    "[HY3_EQ] request request_id=%s stage_sampling=%s",
+                    request_id,
+                    json.dumps(stage_sampling, sort_keys=True, separators=(",", ":"), default=str),
+                )
             result_generator = diffusion_engine.generate(
                 prompt=engine_prompt,
                 sampling_params_list=sampling_params_list,
