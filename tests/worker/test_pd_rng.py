@@ -10,7 +10,10 @@ import pytest
 import torch
 from vllm import SamplingParams
 from vllm.distributed import parallel_state
+from vllm.v1.core.sched.output import NewRequestData
+from vllm.v1.core.sched.scheduler import Scheduler
 
+from vllm_omni.core.sched.omni_ar_scheduler import OmniARAsyncScheduler, OmniARScheduler
 from vllm_omni.core.sched.output import OmniNewRequestData
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.engine.pd_continuation import PD_PREFILL_KEY, PD_RESUME_KEY, PD_RNG_STATE_KEY, PDContinuation
@@ -246,3 +249,42 @@ def test_worker_generator_creation_restores_before_batch_admission(monkeypatch):
     data.initial_output_token_ids = [first]
     data.sampling_params = SamplingParams(temperature=0, seed=42)
     assert runner._create_request_generator(data) is None
+
+
+@pytest.mark.parametrize("scheduler_cls", [OmniARScheduler, OmniARAsyncScheduler])
+def test_schedule_wrapper_transfers_rng_to_worker(monkeypatch, scheduler_cls):
+    monkeypatch.setattr(parallel_state, "get_tp_group", lambda: SimpleNamespace(world_size=1, rank_in_group=0))
+    producer = torch.Generator().manual_seed(42)
+    first = _sample(producer, [])
+    payload = _capture(_producer(producer, [first]), [first])["req"]
+    request = OmniRequest(
+        "req",
+        [1, 2, 3],
+        _params(),
+        None,
+        pd_continuation=PDContinuation(3, [first], rng_state=payload),
+    )
+    # Upstream schedule produces BASE NewRequestData. Test the actual Omni
+    # schedule wrapper, which constructs its own OmniNewRequestData instance.
+    upstream = SimpleNamespace(scheduled_new_reqs=[NewRequestData.from_request(request, ([0],))])
+    monkeypatch.setattr(Scheduler, "schedule", lambda self: upstream, raising=False)
+    scheduler = scheduler_cls.__new__(scheduler_cls)
+    scheduler.requests = {"req": request}
+    scheduler.waiting, scheduler.running = [], []
+    scheduler.chunk_transfer_adapter = scheduler.input_coordinator = None
+    scheduler._finish_pd_terminal_receives = Mock()
+    scheduler._consume_pending_connector_output = Mock()
+    scheduler._process_pending_input_timeouts = Mock()
+    scheduler.get_finished_requests_needing_kv_transfer = Mock(return_value={})
+    scheduler._wrap_omni_scheduler_output = lambda output, **kwargs: output
+    data = scheduler.schedule().scheduled_new_reqs[0]
+    assert isinstance(data, OmniNewRequestData)
+    assert data.pd_rng_state == payload
+    assert data.initial_output_token_ids == [first]
+    assert data.prompt_token_ids == [1, 2, 3]
+    assert msgspec.msgpack.decode(msgspec.msgpack.encode(data))["pd_rng_state"] == payload
+    runner = OmniGPUModelRunner.__new__(OmniGPUModelRunner)
+    runner.device = torch.device("cpu")
+    consumer = runner._create_request_generator(data)
+    assert torch.equal(consumer.get_state(), producer.get_state())
+    assert _sample(consumer, [first]) == _sample(producer, [first])

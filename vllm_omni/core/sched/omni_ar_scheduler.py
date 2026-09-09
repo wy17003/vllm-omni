@@ -394,6 +394,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
                     prompt_is_token_ids=nr.prompt_is_token_ids,
                     additional_information=(getattr(request, "additional_information", None) if request else None),
                     initial_output_token_ids=initial_output_tokens(request),
+                    pd_rng_state=getattr(getattr(request, "pd_continuation", None), "rng_state", None),
                 )
                 new_list.append(omni_nr)
 
