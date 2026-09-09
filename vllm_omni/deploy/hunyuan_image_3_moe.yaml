@@ -34,13 +34,9 @@ connectors:
 
 stages:
   - stage_id: 0
-    # ``is_comprehension`` in vllm-omni names the tokenizer-owning AR stage
-    # (see config/stage_config.py + serving_chat AR-stage lookup), independent
-    # of whether the AR's task is comprehension (i2t/t2t) or generation
-    # (it2i/t2i). HunyuanImage-3.0's stage-0 owns the tokenizer and emits the
-    # cot+ratio token sequence consumed by stage-1, so it must be marked True
-    # for the serving path to set AR seed/stop_token_ids on this stage.
-    is_comprehension: true
+    # Tokenizer ownership is declared in hunyuan_image3/pipeline.py.
+    # Its owns_tokenizer=True exposes is_comprehension to serving so the
+    # request seed overrides this AR stage's default_sampling_params.seed.
     final_output: true
     final_output_type: text
     env:

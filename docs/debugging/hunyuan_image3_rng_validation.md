@@ -23,6 +23,11 @@ generator；若尝试丢失 worker 状态后用首 token 的 RNG 重建已有更
 不参与该接续模式。图像 API 的请求 seed 同时应用到 P/D，再由 D 派生 P。
 P 导出的 RNG 必须匹配该有效 seed，D 使用导出状态继续采样，不能用 seed 覆盖状态。
 
+非 PD 完整 pipeline 和 AR 单阶段 pipeline 的 AR stage 同样声明 `owns_tokenizer=True`。
+服务入口使用该拓扑字段派生的 `is_comprehension` 来选择请求 seed 的覆盖目标；deploy YAML
+中的同名标记不能替代它。验收 seed=43 时，须同时确认入口 AR 参数和 worker `initial_seed`
+均为43，不能仅根据请求体或 DiT 的 seed 判断。
+
 正式接续支持 `temperature>0` 且显式 seed；仍要求 n=1、无 logprobs/grammar、PP/CP=1、
 无推测解码、无 resumable input。旧的 `pd_rng_repro_without_state: true` 仅用于重现缺陷。
 
@@ -32,7 +37,8 @@ P 导出的 RNG 必须匹配该有效 seed，D 使用导出状态继续采样，
 
 ```bash
 pytest -q tests/engine/test_pd_continuation.py tests/engine/test_pd_orchestrator.py \
-  tests/worker/test_pd_rng.py tests/utils/test_hunyuan_rng_debug.py -m "not gpu"
+  tests/worker/test_pd_rng.py tests/utils/test_hunyuan_rng_debug.py \
+  tests/entrypoints/openai_api/test_hunyuan_image3_seed.py -m "not gpu"
 ```
 
 分别部署以下 YAML，沿用原启动指令、NPU 布局和完全相同的请求：
