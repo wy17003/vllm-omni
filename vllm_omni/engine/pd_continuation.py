@@ -8,6 +8,8 @@ import msgspec
 
 PD_RESUME_KEY = "pd_resume_from_prefill"
 PD_PREFILL_KEY = "pd_prefill_one_token"
+# Diagnostic opt-in only: intentionally reproduce the missing RNG handoff.
+PD_RNG_REPRO_KEY = "pd_rng_repro_without_state"
 
 
 class PDContinuation(msgspec.Struct):
@@ -39,9 +41,12 @@ class PDContinuation(msgspec.Struct):
 
 
 def validate_pd_sampling(params) -> None:
-    """Phase one supports greedy, single-completion AR continuation."""
-    if params.temperature != 0 or params.n != 1:
+    """Greedy continuation, with an explicit fixed-seed RNG reproduction mode."""
+    reproduce_rng_gap = (params.extra_args or {}).get(PD_RNG_REPRO_KEY) is True
+    if params.n != 1 or (params.temperature != 0 and not reproduce_rng_gap):
         raise ValueError("PD first-token continuation currently requires temperature=0 and n=1")
+    if reproduce_rng_gap and params.seed is None:
+        raise ValueError("PD RNG reproduction requires an explicit fixed seed; RNG state is NOT resumed")
     if params.logprobs is not None or params.prompt_logprobs is not None:
         raise ValueError("PD first-token continuation does not yet transfer logprobs")
     if getattr(params, "structured_outputs", None) is not None:

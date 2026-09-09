@@ -23,6 +23,7 @@ from vllm_omni.engine.output_processor import MultimodalOutputProcessor, OmniReq
 from vllm_omni.engine.pd_continuation import (
     PD_PREFILL_KEY,
     PD_RESUME_KEY,
+    PD_RNG_REPRO_KEY,
     PDContinuation,
     initial_output_tokens,
     prepend_initial_output,
@@ -245,6 +246,41 @@ def test_unsupported_sampling_is_explicit(kwargs):
         setattr(params, key, value)
     with pytest.raises(ValueError):
         validate_pd_sampling(params)
+
+
+@pytest.mark.parametrize("flag", [None, False, "true"])
+def test_rng_reproduction_requires_explicit_boolean_opt_in(flag):
+    params = SamplingParams(temperature=1, seed=42, extra_args={PD_RNG_REPRO_KEY: flag})
+    with pytest.raises(ValueError, match="temperature=0"):
+        validate_pd_sampling(params)
+
+
+def test_rng_reproduction_requires_seed():
+    params = SamplingParams(temperature=1, extra_args={PD_RNG_REPRO_KEY: True})
+    with pytest.raises(ValueError, match="fixed seed"):
+        validate_pd_sampling(params)
+
+
+@pytest.mark.parametrize("kwargs", [{"n": 2}, {"logprobs": 1}, {"prompt_logprobs": 1}])
+def test_rng_reproduction_keeps_other_sampling_restrictions(kwargs):
+    params = SamplingParams(temperature=1, seed=42, extra_args={PD_RNG_REPRO_KEY: True}, **kwargs)
+    with pytest.raises(ValueError):
+        validate_pd_sampling(params)
+
+
+def test_rng_reproduction_propagates_effective_seed_and_keeps_continuation():
+    params = SamplingParams(
+        temperature=1,
+        seed=43,
+        max_tokens=32,
+        extra_args={PD_RESUME_KEY: True, PD_RNG_REPRO_KEY: True, "kv_transfer_params": {"do_remote_prefill": True}},
+    )
+    producer = PDDisaggregationMixin._prepare_prefill_sampling_params("req", params)
+    assert producer.seed == params.seed == 43
+    assert producer.temperature == 1 and producer.max_tokens == 32
+    assert producer.extra_args[PD_PREFILL_KEY]
+    assert producer.extra_args[PD_RNG_REPRO_KEY]
+    assert list(_request(params=params).output_token_ids) == [791]
 
 
 @pytest.mark.parametrize("cumulative", [None, [791]])

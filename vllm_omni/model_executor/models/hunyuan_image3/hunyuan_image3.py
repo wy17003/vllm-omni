@@ -96,6 +96,7 @@ from vllm.v1.sample.sampler import Sampler
 from vllm_omni.model_executor.models.hunyuan_image3.autoencoder_kl_3d import AutoencoderKLConv3D
 from vllm_omni.model_executor.models.hunyuan_image3.siglip2 import LightProjector, Siglip2VisionTransformer
 from vllm_omni.utils.debug_fingerprint import int_sequence_fingerprint, tensor_topk_summary
+from vllm_omni.utils.hunyuan_rng_debug import sample_with_rng_debug
 
 logger = init_logger(__name__)
 
@@ -1612,6 +1613,7 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
             ]
 
         self._sampler: Sampler | None = None
+        self._hy3_ar_rng_debug = os.environ.get("VLLM_OMNI_HY3_AR_RNG_DEBUG", "").lower() in {"1", "true", "yes", "on"}
         self._eos_token_id: int = tokenizer.eos_token_id
         self._hy3_ar_eq_debug = os.environ.get("VLLM_OMNI_HY3_AR_EQ_DEBUG", "").lower() in {
             "1",
@@ -2128,7 +2130,7 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
                 row["processor"] = "comprehension_block_mask"
             for req_idx, row in debug_rows.items():
                 row["processed_top2"] = tensor_topk_summary(logits[req_idx])
-            sampler_output = self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+            sampler_output = self._sample_with_rng_debug(logits, sampling_metadata)
             self._log_hy3_ar_debug_rows(debug_rows, logits, sampler_output)
             return sampler_output
 
@@ -2159,12 +2161,24 @@ class HunyuanImage3ForConditionalGeneration(nn.Module, SupportsMultiModal, Suppo
 
         for req_idx, row in debug_rows.items():
             row["processed_top2"] = tensor_topk_summary(logits[req_idx])
-        sampler_output = self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+        sampler_output = self._sample_with_rng_debug(logits, sampling_metadata)
         self._log_hy3_ar_debug_rows(debug_rows, logits, sampler_output)
         return sampler_output
 
+    def _sample_with_rng_debug(self, logits, sampling_metadata):
+        if not getattr(self, "_hy3_ar_rng_debug", False):
+            return self._sampler(logits=logits, sampling_metadata=sampling_metadata)
+        return sample_with_rng_debug(
+            self._sampler,
+            logits,
+            sampling_metadata,
+            self._hy3_debug_request_ids,
+            self._hy3_debug_role,
+            get_tensor_model_parallel_rank(),
+        )
+
     def set_hy3_debug_request_context(self, req_ids: list[str], role: str | None = None) -> None:
-        if self._hy3_ar_eq_debug:
+        if self._hy3_ar_eq_debug or getattr(self, "_hy3_ar_rng_debug", False):
             self._hy3_debug_request_ids = list(req_ids)
             self._hy3_debug_role = role
 

@@ -1,0 +1,33 @@
+# A2 step 1 ONLY: intentionally allow random sampling WITHOUT RNG state handoff.
+# P copies D's effective seed and sampling parameters; D restarts its generator.
+base_config: hunyuan_image_3_moe_pd_ar_async_decode.yaml
+stages:
+  - stage_id: 0
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25201"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "31"
+      VLLM_OMNI_HY3_AR_RNG_DEBUG: "1"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+  - stage_id: 1
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25202"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "31"
+      VLLM_OMNI_HY3_AR_RNG_DEBUG: "1"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+    default_sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      seed: 42
+      max_tokens: 32
+      min_tokens: 0
+      repetition_penalty: 1.0
+      presence_penalty: 0.0
+      frequency_penalty: 0.0
+      extra_args:
+        pd_resume_from_prefill: true
+        pd_rng_repro_without_state: true

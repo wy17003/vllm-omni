@@ -1,0 +1,20 @@
+# A2 step 1: fixed-seed non-PD baseline, 32 AR tokens, full first-two-step RNG logs.
+base_config: hunyuan_image_3_moe_ar_boundary.yaml
+stages:
+  - stage_id: 0
+    async_scheduling: true
+    env:
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "31"
+      VLLM_OMNI_HY3_AR_RNG_DEBUG: "1"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+    default_sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      seed: 42
+      max_tokens: 32
+      min_tokens: 0
+      repetition_penalty: 1.0
+      presence_penalty: 0.0
+      frequency_penalty: 0.0
