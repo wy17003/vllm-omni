@@ -1,5 +1,9 @@
 # HunyuanImage3 A2 第一步：固定 seed 随机采样差异复现
 
+> 本文保留第一步的缺陷复现操作。正式修复后的验收请使用
+> [固定 seed 随机采样接续验收](hunyuan_image3_rng_validation.md)。当前正式路径已允许固定 seed
+> 随机采样；下文“正式配置拒绝”描述的是修复前行为，旧 repro YAML 仍故意绕过状态接续。
+
 本轮只复现并记录 RNG 接续缺口，不传递、恢复或推进 D 的 RNG 状态。
 正式配置继续拒绝随机 PD 接续；仅实验参数 `pd_rng_repro_without_state: true`
 临时允许带显式 seed 的随机采样，n=1、无 logprobs/grammar 等限制保持不变。

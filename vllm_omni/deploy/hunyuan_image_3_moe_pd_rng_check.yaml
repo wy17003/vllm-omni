@@ -1,0 +1,9 @@
+# A2 repaired path: same 32-token request as the reproduction, with RNG handoff.
+# P is synchronous, D asynchronous; logical AR parameters (including seed=42)
+# are declared only on D in the base config and copied to P at submission.
+base_config: hunyuan_image_3_moe_pd_rng_repro.yaml
+stages:
+  - stage_id: 1
+    default_sampling_params:
+      extra_args:
+        pd_rng_repro_without_state: false

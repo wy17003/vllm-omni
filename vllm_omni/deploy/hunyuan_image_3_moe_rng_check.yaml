@@ -1,0 +1,2 @@
+# Non-PD control for hunyuan_image_3_moe_pd_rng_check.yaml.
+base_config: hunyuan_image_3_moe_rng_repro.yaml

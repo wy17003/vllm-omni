@@ -8,6 +8,7 @@ import pytest
 from vllm import SamplingParams
 
 from vllm_omni.engine.orchestrator import Orchestrator
+from vllm_omni.engine.pd_continuation import PD_RNG_STATE_KEY
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -46,6 +47,16 @@ def test_pd_decode_params_preserve_optional_prefill_output() -> None:
     kv_params = result.extra_args["kv_transfer_params"]
     assert kv_params["remote_request_id"] == "prefill-request"
     assert kv_params["connector_metadata"] == "kept"
+
+
+def test_pd_rng_state_is_not_forwarded_to_mooncake() -> None:
+    envelope = {PD_RNG_STATE_KEY: b"opaque RNG payload", "remote_request_id": "prefill-request"}
+    orchestrator = _make_pd_orchestrator(envelope)
+    result = orchestrator._build_pd_decode_params("req", SamplingParams(max_tokens=2))
+    assert PD_RNG_STATE_KEY not in result.extra_args["kv_transfer_params"]
+    assert result.extra_args["kv_transfer_params"]["remote_request_id"] == "prefill-request"
+    # The original output is subsequently read by PDContinuation.from_output.
+    assert envelope[PD_RNG_STATE_KEY] == b"opaque RNG payload"
 
 
 @pytest.mark.parametrize(

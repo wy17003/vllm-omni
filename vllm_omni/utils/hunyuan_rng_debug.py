@@ -61,7 +61,7 @@ def sample_with_rng_debug(sampler, logits, sampling_metadata, request_ids, role,
                 "output_ordinal": len(history) + 1,
                 "history_sha256": int_sequence_fingerprint(history),
                 "sampler_class": f"{type(sampler).__module__}.{type(sampler).__name__}",
-                "experiment": "rng_without_handoff",
+                "experiment": "pd_rng_continuation",
                 "random_sampler_called": False,
             }
     if not rows:

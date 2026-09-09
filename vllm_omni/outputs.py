@@ -54,6 +54,8 @@ class OmniModelRunnerOutput(ModelRunnerOutput):
     # The Scheduler can safely free the block tables for these requests.
     kv_extracted_req_ids: list[str] | None = None
     omni_connector_output: OmniConnectorOutput | None = None
+    # Serialized per-TP-rank generator states, only for accepted PD first tokens.
+    pd_rng_states: dict[str, bytes] | None = None
 
 
 @dataclass

@@ -57,6 +57,7 @@ from vllm_omni.utils.debug_fingerprint import (
 )
 from vllm_omni.utils.hunyuan_kv_causal import HunyuanKVCausalProbe
 from vllm_omni.utils.mm_outputs import build_mm_cpu, to_payload_element
+from vllm_omni.worker.pd_rng import capture_pd_rng_states
 
 
 def _ensure_tensor_values(payload: dict[str, object]) -> dict[str, torch.Tensor]:
@@ -1233,6 +1234,11 @@ class NPUARModelRunner(OmniNPUModelRunner):
             spec_decode_metadata,
         )
 
+        pd_rng_states = capture_pd_rng_states(
+            self.requests, req_ids_output_copy, valid_sampled_token_ids,
+            tp_group=get_tp_group, async_scheduling=self.use_async_scheduling,
+        )
+
         with record_function_or_nullcontext("draft_token"):
             if self.speculative_config:
                 use_padded_batch = (
@@ -1424,6 +1430,7 @@ class NPUARModelRunner(OmniNPUModelRunner):
             cudagraph_stats=cudagraph_stats,
         )
         model_runner_output.kv_extracted_req_ids = kv_extracted_req_ids
+        model_runner_output.pd_rng_states = pd_rng_states
         model_runner_output.routed_experts = routed_experts_lists
         #  -------------------------------------- Omni-new -------------------------------------------------
 

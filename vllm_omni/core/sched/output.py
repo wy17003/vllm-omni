@@ -25,6 +25,7 @@ class OmniNewRequestData(NewRequestData):
     external_req_id: str | None = None
     additional_information: AdditionalInformationPayload | None = None
     initial_output_token_ids: list[int] = field(default_factory=list)
+    pd_rng_state: bytes | None = None
 
     @classmethod
     def from_request(
@@ -57,6 +58,7 @@ class OmniNewRequestData(NewRequestData):
             prompt_is_token_ids=getattr(request, "prompt_is_token_ids", None),
             prefill_token_ids=prefill_token_ids,
             additional_information=getattr(request, "additional_information", None),
+            pd_rng_state=getattr(getattr(request, "pd_continuation", None), "rng_state", None),
             initial_output_token_ids=(
                 list(request.output_token_ids) if getattr(request, "pd_continuation", None) is not None else []
             ),
