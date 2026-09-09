@@ -36,6 +36,9 @@ producer token；detokenizer、累计文本、使用量及 AR 桥接沿用现有
 
 ## 服务器验证
 
+原请求重复验证通过后，使用[最小回归实验](hunyuan_image3_pd_minimal_regression.md)中的六份薄配置，
+完成 max_tokens=1/2 和 prompt 长度 1279/1280/1281 的十次请求验证。
+
 使用原启动命令并指定 `vllm_omni/deploy/hunyuan_image_3_moe_pd.yaml`，继续发送同一个请求。
 旧 KV 因果实验配置及探针没有调整；不要使用 `*_kv_check.yaml`、`*_kv_restore.yaml` 启动此接续路径。
 若启动环境仍显式设置 `VLLM_OMNI_HY3_KV_CAUSAL_MODE`，将其设为 `off`。

@@ -1,0 +1,6 @@
+# Non-PD baseline: the original cat request should produce [791, 1217].
+base_config: hunyuan_image_3_moe_ar_boundary.yaml
+stages:
+  - stage_id: 0
+    default_sampling_params:
+      max_tokens: 2

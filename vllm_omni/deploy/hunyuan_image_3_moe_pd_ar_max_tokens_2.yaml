@@ -1,0 +1,7 @@
+# Logical output budget is two: D forwards y1 once and emits [y1, y2].
+# P inherits D's logical sampling parameters and samples once before handoff.
+base_config: hunyuan_image_3_moe_pd_ar_boundary.yaml
+stages:
+  - stage_id: 1
+    default_sampling_params:
+      max_tokens: 2

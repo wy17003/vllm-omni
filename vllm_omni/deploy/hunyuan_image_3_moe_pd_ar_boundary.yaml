@@ -1,0 +1,28 @@
+# PD first-token continuation regression for prompt lengths 1279/1280/1281.
+# The old causal probe requires prompt-tail recomputation; keep it disabled.
+# See docs/debugging/hunyuan_image3_pd_minimal_regression.md.
+base_config: hunyuan_image_3_moe_pd.yaml
+stages:
+  - stage_id: 0
+    async_scheduling: false
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25201"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+  - stage_id: 1
+    async_scheduling: false
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25202"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "1"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG_MAX_STEP: "100"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+    default_sampling_params:
+      temperature: 0.0
+      n: 1
+      max_tokens: 8192
+      min_tokens: 0
+      extra_args:
+        pd_resume_from_prefill: true
