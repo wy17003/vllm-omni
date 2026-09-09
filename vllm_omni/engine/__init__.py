@@ -12,6 +12,8 @@ from vllm.v1.engine import (
     EngineCoreRequest,
 )
 
+from vllm_omni.engine.pd_continuation import PDContinuation
+
 
 class PromptEmbedsPayload(msgspec.Struct):
     """Serialized prompt embeddings payload for direct transfer.
@@ -75,6 +77,7 @@ class OmniEngineCoreRequest(EngineCoreRequest):
 
     # Optional additional information dictionary (serialized)
     additional_information: AdditionalInformationPayload | None = None
+    pd_continuation: PDContinuation | None = None
 
     @classmethod
     def from_request(
@@ -113,6 +116,7 @@ class OmniEngineCoreRequest(EngineCoreRequest):
             reasoning_parser_kwargs=request.reasoning_parser_kwargs,
             abort_immediately=request.abort_immediately,
             additional_information=additional_information,
+            pd_continuation=getattr(request, "pd_continuation", None),
         )
 
 

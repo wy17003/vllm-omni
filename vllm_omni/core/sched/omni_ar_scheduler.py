@@ -12,7 +12,7 @@ from vllm.logger import init_logger
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler as AsyncVLLMScheduler
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.core.sched.scheduler import Scheduler as VLLMScheduler
-from vllm.v1.core.sched.utils import remove_all
+from vllm.v1.core.sched.utils import check_stop, remove_all
 from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutputs, FinishReason
 from vllm.v1.metrics.perf import PerfStats
 from vllm.v1.outputs import ModelRunnerOutput
@@ -29,6 +29,7 @@ from vllm_omni.distributed.omni_connectors.transfer_adapter.chunk_transfer_adapt
     OmniChunkTransferAdapter,
 )
 from vllm_omni.engine import OmniEngineCoreOutput
+from vllm_omni.engine.pd_continuation import PD_PREFILL_KEY, initial_output_tokens, prepend_initial_output
 from vllm_omni.engine.serialization import (
     deserialize_additional_information,
     request_needs_downstream_stage,
@@ -104,6 +105,112 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         self._latest_omni_connector_output: OmniConnectorOutput | None = None
         # Snapshot prompt length for each streaming input update
         self._new_prompt_len_snapshot: dict[str, int] = {}
+        self._pd_completed_outputs: list[tuple[int, OmniEngineCoreOutput]] = []
+
+    def add_request(self, request: Request) -> None:
+        params = request.sampling_params
+        is_pd_resume = getattr(request, "pd_continuation", None) is not None
+        is_pd_prefill = params is not None and (params.extra_args or {}).get(PD_PREFILL_KEY)
+        if is_pd_resume or is_pd_prefill:
+            parallel = self.vllm_config.parallel_config
+            if (
+                self.scheduler_config.async_scheduling
+                or self.vllm_config.speculative_config is not None
+                or parallel.pipeline_parallel_size != 1
+                or getattr(parallel, "decode_context_parallel_size", 1) != 1
+                or getattr(parallel, "prefill_context_parallel_size", 1) != 1
+                or request.resumable
+            ):
+                raise ValueError("PD first-token continuation requires synchronous scheduling, PP/CP=1, no speculation")
+        return super().add_request(request)
+
+    def _update_request_with_output(self, request: Request, new_token_ids: list[int], *args, **kwargs):
+        token_ids, stopped = super()._update_request_with_output(request, new_token_ids, *args, **kwargs)
+        params = request.sampling_params
+        if params is not None and (params.extra_args or {}).get(PD_PREFILL_KEY) and token_ids:
+            # This is an execution boundary, not the user's logical stop rule.
+            # Keep the actual first-token sampler masks, but satisfy Mooncake's
+            # length-finished contract so it retains the prompt blocks for D.
+            if request.num_output_tokens != 1:
+                raise RuntimeError("PD producer must execute exactly one sample")
+            request.status = RequestStatus.FINISHED_LENGTH_CAPPED
+            request.stop_reason = None
+            return token_ids, True
+        return token_ids, stopped
+
+    def _finish_pd_terminal_receives(self) -> None:
+        """Complete a terminal y1 after its prompt KV arrives, without forward.
+
+        The regular _free_request path retains blocks for downstream extraction.
+        Its result is emitted in update_from_output, after the transfer-only
+        worker execution, rather than being mistaken for an abort.
+        """
+        if not any(getattr(req, "pd_continuation", None) is not None for req in self.requests.values()):
+            return
+        queues = (self.waiting, self.skipped_waiting)
+        seen = set()
+        for queue in queues:
+            for request in list(queue):
+                req_id = request.request_id
+                continuation = getattr(request, "pd_continuation", None)
+                if (
+                    continuation is None
+                    or req_id in seen
+                    or request.status != RequestStatus.WAITING_FOR_REMOTE_KVS
+                    or req_id not in self.finished_recving_kv_req_ids
+                ):
+                    continue
+                seen.add(req_id)
+                old_status, old_reason = request.status, request.stop_reason
+                stopped = check_stop(request, self.max_model_len)
+                if continuation.stop_string is not None:
+                    request.status = RequestStatus.FINISHED_STOPPED
+                    request.stop_reason = continuation.stop_string
+                    stopped = True
+                terminal_status, terminal_reason = request.status, request.stop_reason
+                request.status, request.stop_reason = old_status, old_reason
+                if not stopped:
+                    continue
+                self._update_waiting_for_remote_kv(request)
+                if request.num_computed_tokens != continuation.prompt_len:
+                    raise RuntimeError("PD terminal continuation requires all prompt KV to be received")
+                for pending in queues:
+                    pending.remove_requests([request])
+                request.status, request.stop_reason = terminal_status, terminal_reason
+                finish_reason = request.get_finished_reason()
+                kv_params = self._free_request(request)
+                request.pd_output_prefix_pending = False
+                self._pd_completed_outputs.append(
+                    (
+                        request.client_index,
+                        OmniEngineCoreOutput(
+                            request_id=req_id,
+                            new_token_ids=list(continuation.token_ids),
+                            # STOP would drop the entire last token in detokenization,
+                            # including text before a stop string within y1. Flush y1
+                            # normally; the output processor then applies the text stop
+                            # and replaces LENGTH with STOP, just as in ordinary AR.
+                            finish_reason=FinishReason.LENGTH
+                            if continuation.stop_string is not None
+                            else finish_reason,
+                            stop_reason=None if continuation.stop_string is not None else terminal_reason,
+                            kv_transfer_params=kv_params,
+                            events=request.take_events(),
+                            prefill_stats=request.take_prefill_stats(),
+                            trace_headers=request.trace_headers,
+                            is_segment_finished=True,
+                        ),
+                    )
+                )
+
+    def _update_waiting_for_remote_kv(self, request: Request):
+        continuation = getattr(request, "pd_continuation", None)
+        if continuation is not None and request.request_id in self.failed_recving_kv_req_ids:
+            raise RuntimeError("PD continuation prompt KV load failed; cannot resume with incomplete KV")
+        result = super()._update_waiting_for_remote_kv(request)
+        if continuation is not None and request.num_computed_tokens != continuation.prompt_len:
+            raise RuntimeError("PD continuation expected complete prompt KV, without tail recomputation")
+        return result
 
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
         """num_computed_tokens minus async placeholders (KV actually on GPU)."""
@@ -221,6 +328,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         return False
 
     def schedule(self) -> SchedulerOutput:  # type: ignore[override]
+        self._finish_pd_terminal_receives()
         # Remove FINISHED_ABORTED requests before the upstream scheduler sees
         # them. Upstream vllm raises RuntimeError on this status; omni allows
         # async abort (e.g. client disconnect during TTS streaming) to leave
@@ -274,6 +382,7 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
                     prompt_embeds=(getattr(request, "prompt_embeds", None) if request else None),
                     prompt_is_token_ids=nr.prompt_is_token_ids,
                     additional_information=(getattr(request, "additional_information", None) if request else None),
+                    initial_output_token_ids=initial_output_tokens(request),
                 )
                 new_list.append(omni_nr)
 
@@ -313,6 +422,9 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             perf_stats = self.perf_metrics.get_step_perf_stats_per_gpu(scheduler_output)
 
         outputs: dict[int, list[EngineCoreOutput]] = defaultdict(list)
+        for client_index, output in getattr(self, "_pd_completed_outputs", []):
+            outputs[client_index].append(output)
+        self._pd_completed_outputs = []
         spec_decoding_stats: SpecDecodingStats | None = None
         kv_connector_stats: KVConnectorStats | None = (
             kv_connector_output.kv_connector_stats if kv_connector_output else None
@@ -481,6 +593,8 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             # Get prompt logprobs for this request.
             prompt_logprobs_tensors = prompt_logprobs_dict.get(req_id)
             if new_token_ids or mm_output is not None or pooler_output is not None or kv_transfer_params or stopped:
+                # Only the emitted delta needs y1; model history already has it.
+                new_token_ids = prepend_initial_output(request, new_token_ids, stopped)
                 # Add EngineCoreOutput for this Request.
                 outputs[request.client_index].append(
                     OmniEngineCoreOutput(
