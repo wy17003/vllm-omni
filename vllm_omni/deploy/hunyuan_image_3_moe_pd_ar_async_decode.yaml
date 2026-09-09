@@ -1,0 +1,8 @@
+# A1: P stays synchronous; D explicitly uses OmniARAsyncScheduler.
+# Use the original cat request (900 outputs) and the length-1280 request.
+base_config: hunyuan_image_3_moe_pd_ar_boundary.yaml
+stages:
+  - stage_id: 0
+    async_scheduling: false
+  - stage_id: 1
+    async_scheduling: true

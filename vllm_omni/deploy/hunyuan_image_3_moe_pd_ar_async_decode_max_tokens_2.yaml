@@ -1,0 +1,6 @@
+# A1: D forwards y1 once and stops after sampling y2, under async scheduling.
+base_config: hunyuan_image_3_moe_pd_ar_async_decode.yaml
+stages:
+  - stage_id: 1
+    default_sampling_params:
+      max_tokens: 2

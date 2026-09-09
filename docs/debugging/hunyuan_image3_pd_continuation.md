@@ -1,7 +1,9 @@
 # HunyuanImage3 PD 首 token 接续
 
 `hunyuan_image_3_moe_pd.yaml` 的 decode stage 默认启用
-`default_sampling_params.extra_args.pd_resume_from_prefill: true`，两个 AR stage 使用同步调度。
+`default_sampling_params.extra_args.pd_resume_from_prefill: true`。P 必须使用同步调度；D 支持同步或异步调度。
+已验证的同步对照由 `hunyuan_image_3_moe_pd_ar_boundary.yaml` 显式指定；
+[A1 实验](hunyuan_image3_pd_async_decode.md)使用独立配置显式开启 D 异步，P 保持同步。
 当前范围为单输出、`temperature=0`、PP/CP=1，无推测解码；暂不支持 logprobs 和结构化输出状态接续。
 
 ## 状态约定
@@ -39,7 +41,7 @@ producer token；detokenizer、累计文本、使用量及 AR 桥接沿用现有
 原请求重复验证通过后，使用[最小回归实验](hunyuan_image3_pd_minimal_regression.md)中的六份薄配置，
 完成 max_tokens=1/2 和 prompt 长度 1279/1280/1281 的十次请求验证。
 
-使用原启动命令并指定 `vllm_omni/deploy/hunyuan_image_3_moe_pd.yaml`，继续发送同一个请求。
+使用原启动命令并指定 `vllm_omni/deploy/hunyuan_image_3_moe_pd_ar_boundary.yaml`，继续发送同一个请求。
 旧 KV 因果实验配置及探针没有调整；不要使用 `*_kv_check.yaml`、`*_kv_restore.yaml` 启动此接续路径。
 若启动环境仍显式设置 `VLLM_OMNI_HY3_KV_CAUSAL_MODE`，将其设为 `off`。
 现有 `HY3_AR_INPUT`、`HY3_AR_LOGITS`、`HY3_EQ` 日志保留原实现。
@@ -56,3 +58,6 @@ pytest -q tests/engine/test_pd_continuation.py tests/test_omni_request.py tests/
 再覆盖 `max_tokens=1/2`、终止 token/字符串、连续请求及取消后的资源释放。
 本地验证采用隔离加载相关源码的 CPU 环境，使用实际上游 SamplingParams、Request、
 停止检查、KV 接收方法和 detokenizer 逻辑；未执行 NPU/Mooncake 服务集成测试。
+
+D 异步回归还覆盖上游 AsyncScheduler 的占位计数、已确认 KV 长度、
+模型采样历史在 batch 换位后的恢复，以及终止请求的迟到输出丢弃；服务器需完成 A1 实验验收。
