@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 import msgspec
 import pytest
+import torch
 from vllm import SamplingParams
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.sched.utils import check_stop
@@ -15,7 +16,7 @@ from vllm.v1.engine import FinishReason
 from vllm.v1.engine.detokenizer import BaseIncrementalDetokenizer, IncrementalDetokenizer
 from vllm.v1.request import RequestStatus
 
-from vllm_omni.core.sched.omni_ar_scheduler import OmniARScheduler
+from vllm_omni.core.sched.omni_ar_scheduler import OmniARAsyncScheduler, OmniARScheduler
 from vllm_omni.core.sched.output import OmniNewRequestData
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.engine.output_processor import MultimodalOutputProcessor, OmniRequestState
@@ -29,6 +30,7 @@ from vllm_omni.engine.pd_continuation import (
 )
 from vllm_omni.entrypoints.pd_utils import PDDisaggregationMixin
 from vllm_omni.request import OmniRequest
+from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -161,8 +163,8 @@ class _Queue(list):
                 self.remove(req)
 
 
-def _receiver(req):
-    scheduler = OmniARScheduler.__new__(OmniARScheduler)
+def _receiver(req, scheduler_cls=OmniARScheduler):
+    scheduler = scheduler_cls.__new__(scheduler_cls)
     scheduler.max_model_len = 4096
     scheduler.requests = {req.request_id: req}
     scheduler.waiting = _Queue([req])
@@ -186,9 +188,12 @@ def _receiver(req):
         ({"stop": ["STOP"]}, 791, "STOP", FinishReason.LENGTH),
     ],
 )
-def test_terminal_first_token_waits_for_kv_then_finishes_without_forward(params, token, stop_string, reason):
+@pytest.mark.parametrize("scheduler_cls", [OmniARScheduler, OmniARAsyncScheduler])
+def test_terminal_first_token_waits_for_kv_then_finishes_without_forward(
+    params, token, stop_string, reason, scheduler_cls
+):
     req = _request(params=_params(**params), token=token, stop_string=stop_string)
-    scheduler = _receiver(req)
+    scheduler = _receiver(req, scheduler_cls)
     scheduler._finish_pd_terminal_receives()
     scheduler._free_request.assert_not_called()
     assert scheduler.waiting == [req]
@@ -201,6 +206,7 @@ def test_terminal_first_token_waits_for_kv_then_finishes_without_forward(params,
     assert output.new_token_ids == [token]
     assert output.finish_reason == reason
     assert req.num_computed_tokens == 1236  # No y1 forward or extra sampling.
+    assert req.num_output_placeholders == 0
     assert not req.pd_output_prefix_pending
     scheduler._finish_pd_terminal_receives()
     assert len(scheduler._pd_completed_outputs) == 1
@@ -270,19 +276,120 @@ def test_failed_receive_does_not_allow_recomputation():
         scheduler._update_waiting_for_remote_kv(scheduler.requests["req"])
 
 
-@pytest.mark.parametrize("unsupported", ["async", "speculation", "pp"])
+@pytest.mark.parametrize("unsupported", ["speculation", "pp", "dcp", "pcp", "resumable"])
 def test_unsupported_scheduler_modes_rejected_before_admission(monkeypatch, unsupported):
-    scheduler = _receiver(_request())
-    scheduler.scheduler_config = SimpleNamespace(async_scheduling=unsupported == "async")
+    scheduler = _receiver(_request(), OmniARAsyncScheduler)
+    scheduler.scheduler_config = SimpleNamespace(async_scheduling=True)
     scheduler.vllm_config = SimpleNamespace(
         speculative_config=object() if unsupported == "speculation" else None,
-        parallel_config=SimpleNamespace(pipeline_parallel_size=2 if unsupported == "pp" else 1),
+        parallel_config=SimpleNamespace(
+            pipeline_parallel_size=2 if unsupported == "pp" else 1,
+            decode_context_parallel_size=2 if unsupported == "dcp" else 1,
+            prefill_context_parallel_size=2 if unsupported == "pcp" else 1,
+        ),
+    )
+    scheduler.requests["req"].resumable = unsupported == "resumable"
+    admitted = Mock()
+    monkeypatch.setattr(Scheduler, "add_request", admitted)
+    with pytest.raises(ValueError, match="PP/CP=1"):
+        scheduler.add_request(scheduler.requests["req"])
+    admitted.assert_not_called()
+
+
+@pytest.mark.parametrize("producer", [False, True])
+def test_async_admission_allows_consumer_only(monkeypatch, producer):
+    req = _request()
+    if producer:
+        params = PDDisaggregationMixin._prepare_prefill_sampling_params("req", _params())
+        req = OmniRequest("req", [1, 2, 3], params, None)
+    scheduler = OmniARAsyncScheduler.__new__(OmniARAsyncScheduler)
+    scheduler.scheduler_config = SimpleNamespace(async_scheduling=True)
+    scheduler.vllm_config = SimpleNamespace(
+        speculative_config=None, parallel_config=SimpleNamespace(pipeline_parallel_size=1)
     )
     admitted = Mock()
     monkeypatch.setattr(Scheduler, "add_request", admitted)
-    with pytest.raises(ValueError, match="synchronous scheduling"):
-        scheduler.add_request(scheduler.requests["req"])
-    admitted.assert_not_called()
+    if producer:
+        with pytest.raises(ValueError, match="producer requires synchronous scheduling"):
+            scheduler.add_request(req)
+        admitted.assert_not_called()
+    else:
+        scheduler.add_request(req)
+        admitted.assert_called_once_with(req)
+
+
+def _async_decode_step(scheduler, req):
+    # Exercise the real AsyncScheduler MRO, including upstream computed-token
+    # advancement and one placeholder for each scheduled (not imported) output.
+    scheduler.defer_block_free = False
+    scheduler._inflight_prefills = set()
+    scheduler.enable_return_routed_experts = False
+    scheduler.num_sampled_tokens_per_step = 1
+    scheduler.use_v2_model_runner = False
+    output = SimpleNamespace(
+        num_scheduled_tokens={req.request_id: 1},
+        scheduled_spec_decode_tokens={},
+        num_spec_tokens_to_schedule=0,
+        has_structured_output_requests=False,
+        pending_structured_output_tokens=False,
+    )
+    scheduler._update_after_schedule(output)
+
+
+@pytest.mark.parametrize("length", [1279, 1280, 1281])
+def test_async_two_token_limit_counts_imported_token_without_placeholder(length):
+    req = _request(length, params=_params(max_tokens=2))
+    scheduler = _receiver(req, OmniARAsyncScheduler)
+    scheduler.finished_recving_kv_req_ids.add("req")
+    scheduler._update_waiting_for_remote_kv(req)
+    req.status = RequestStatus.RUNNING
+    assert req.num_output_placeholders == 0
+    _async_decode_step(scheduler, req)
+    assert req.num_computed_tokens == length + 1
+    assert req.num_output_placeholders == 1
+    tokens, stopped = scheduler._update_request_with_output(req, [1217])
+    assert stopped and req.status == RequestStatus.FINISHED_LENGTH_CAPPED
+    assert req.num_output_placeholders == 0
+    assert scheduler._get_confirmed_num_computed_tokens(req) == length + 1
+    assert prepend_initial_output(req, tokens, stopped) == [791, 1217]
+    assert req.num_output_tokens == 2
+
+
+def test_async_inflight_decode_keeps_confirmed_kv_and_emits_prefix_once():
+    req = _request(params=_params(max_tokens=8, stop_token_ids=[42]))
+    scheduler = _receiver(req, OmniARAsyncScheduler)
+    req.status = RequestStatus.RUNNING
+    _async_decode_step(scheduler, req)
+    _async_decode_step(scheduler, req)  # Another step submitted before y2 arrives.
+    assert req.num_output_placeholders == 2
+    tokens, stopped = scheduler._update_request_with_output(req, [1217])
+    assert not stopped
+    assert req.num_output_placeholders == 1
+    assert scheduler._get_confirmed_num_computed_tokens(req) == 1237
+    assert prepend_initial_output(req, tokens, stopped) == [791, 1217]
+    _async_decode_step(scheduler, req)
+    tokens, stopped = scheduler._update_request_with_output(req, [42])
+    assert stopped
+    assert prepend_initial_output(req, tokens, stopped) == [42]
+    assert list(req.output_token_ids) == [791, 1217, 42]
+    # The extra in-flight forward is not part of the KV exported at the stop.
+    assert scheduler._get_confirmed_num_computed_tokens(req) == 1238
+    scheduler.kv_cache_manager.cache_blocks.assert_called_with(req, 1238)
+
+
+def test_async_model_sampler_history_preserves_imported_token_across_batch_reorder():
+    runner = OmniGPUModelRunner.__new__(OmniGPUModelRunner)
+    event = Mock()
+    runner.input_batch = SimpleNamespace(
+        req_ids=["other", "req", "new"],
+        req_output_token_ids=[[9, -1], [791, -1], [791]],
+        prev_req_id_to_index={"req": 0, "other": 1},
+        sampled_token_ids_cpu=torch.tensor([[1217], [10]]),
+        async_copy_ready_event=event,
+    )
+    assert runner._build_model_sampler_output_token_ids() == [[9, 10], [791, 1217], [791]]
+    event.synchronize.assert_called_once()
+    assert runner.input_batch.req_output_token_ids == [[9, -1], [791, -1], [791]]
 
 
 class _TextDetokenizer(BaseIncrementalDetokenizer):
@@ -322,9 +429,10 @@ def test_first_token_string_stop_uses_normal_detokenizer_semantics(monkeypatch, 
         assert detector.get_next_output_text(True, True) == ""  # No duplicate delta.
 
 
-def test_terminal_output_flushes_on_transfer_only_step_and_releases_kv_once():
+@pytest.mark.parametrize("scheduler_cls", [OmniARScheduler, OmniARAsyncScheduler])
+def test_terminal_output_flushes_on_transfer_only_step_and_releases_kv_once(scheduler_cls):
     req = _request(params=_params(max_tokens=1))
-    scheduler = _receiver(req)
+    scheduler = _receiver(req, scheduler_cls)
     scheduler.finished_recving_kv_req_ids.add("req")
     scheduler._finish_pd_terminal_receives()
     scheduler.perf_metrics = None
@@ -359,3 +467,11 @@ def test_terminal_output_flushes_on_transfer_only_step_and_releases_kv_once():
     assert not scheduler.active_kv_transfers
     assert not scheduler.waiting_for_transfer_free
     assert not scheduler._pd_completed_outputs
+    # A late result for the completed request must not emit or free it again.
+    if scheduler_cls is OmniARAsyncScheduler:
+        schedule.num_scheduled_tokens = {"req": 1}
+        worker.sampled_token_ids = [[1217]]
+        worker.kv_extracted_req_ids = []
+        scheduler.finished_req_ids_dict.clear()
+        assert not scheduler.update_from_output(schedule, worker)
+        scheduler.kv_cache_manager.free.assert_called_once_with(req)

@@ -56,7 +56,6 @@ stages:
       skip_special_tokens: false
 
   - stage_id: 1
-    async_scheduling: false
     devices: "2,3"
     env:
       VLLM_HOST_IP: "127.0.0.1"

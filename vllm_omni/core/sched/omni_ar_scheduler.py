@@ -113,15 +113,20 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         is_pd_prefill = params is not None and (params.extra_args or {}).get(PD_PREFILL_KEY)
         if is_pd_resume or is_pd_prefill:
             parallel = self.vllm_config.parallel_config
+            # P's one-sample budget is enforced when its output arrives, so
+            # it cannot submit another step before that output is processed.
+            # D uses the normal AsyncScheduler placeholder accounting; y1 is
+            # already confirmed history and must not create a placeholder.
+            if is_pd_prefill and self.scheduler_config.async_scheduling:
+                raise ValueError("PD first-token producer requires synchronous scheduling")
             if (
-                self.scheduler_config.async_scheduling
-                or self.vllm_config.speculative_config is not None
+                self.vllm_config.speculative_config is not None
                 or parallel.pipeline_parallel_size != 1
                 or getattr(parallel, "decode_context_parallel_size", 1) != 1
                 or getattr(parallel, "prefill_context_parallel_size", 1) != 1
                 or request.resumable
             ):
-                raise ValueError("PD first-token continuation requires synchronous scheduling, PP/CP=1, no speculation")
+                raise ValueError("PD first-token continuation requires PP/CP=1, no speculation, no resumable input")
         return super().add_request(request)
 
     def _update_request_with_output(self, request: Request, new_token_ids: list[int], *args, **kwargs):
