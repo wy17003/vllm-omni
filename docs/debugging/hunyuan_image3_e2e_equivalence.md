@@ -3,6 +3,9 @@
 本轮只验证 NPU、1P1D、每阶段 TP=4、单请求 T2I（think）、CFG 关闭的完整链路。
 保持 P `async_scheduling: false`，D 和非 PD AR `async_scheduling: true`；
 保持 `step_execution: false`、KV 异步预取开启、prefix caching 关闭。
+DiT YAML 同时设置 `guidance_scale: 0` 和 `guidance_scale_provided: true`。
+后者区分“显式关闭 CFG”和通用采样参数的零值哨兵；需使用本轮修复后的
+`OmniDiffusionRequest.__post_init__`，确保初始化不覆盖显式零值。
 不再执行尾 KV restore，不打开旧 AR logits/RNG 定位探针，不更改已有接续修复。
 
 此前随机采样只验证了 32 个 AR token；本轮恢复 `max_tokens: 8192` 和正常停止条件，
@@ -62,10 +65,10 @@ AR temperature/max_tokens 使用 YAML；不要在图片请求中添加未经接�
 | 事件 | 检查项 |
 | --- | --- |
 | `kv_full event=send/receive` | AR→DiT 全部层 K/V 的 shape、dtype、完整字节 SHA256、整体摘要及 seq_len |
-| `dit_request` | DiT 接收的完整 KV、实际 prompt/归一化 CoT/system prompt、seed、尺寸、guidance、步数 |
+| `dit_request` | DiT 接收的完整 KV、实际 prompt/归一化 CoT/system prompt、seed、尺寸、ratio、有效/采样 guidance 及 provided 标记、步数 |
 | `dit_initial` | 初始 latent 完整哈希及统计、generator 初始 seed、实际 timesteps/sigmas、scheduler 配置 |
-| `dit_condition` | KV 复用长度、截断后 input IDs、mask/position 等张量、query/seq 长度 |
-| `dit_injected_kv` | 真正注入每层 attention 的有效 KV，全部元素摘要 |
+| `dit_condition` | KV 复用长度、截断后 input IDs、mask/position 等张量、query/seq 长度，以及实际 TP/SP/CFG 大小、CFG 开启/并行状态 |
+| `dit_injected_kv` | 真正注入每层 attention 的有效 KV，全部元素摘要；本轮应只有 `branch=positive, branch_count=1` |
 | `dit_step` | 第 1、10、25、50 步的 timestep、guidance 后 prediction、scheduler 更新后 latent 的完整摘要和统计 |
 | `dit_final` | 去噪结束、VAE 缩放之前的最终 latent |
 | `vae_output` | VAE 解码后、图像后处理之前的浮点图像张量 |
@@ -119,9 +122,39 @@ AR temperature/max_tokens 使用 YAML；不要在图片请求中添加未经接�
 在依赖已安装的测试环境中执行：
 
 ```bash
-pytest --noconftest tests/utils/test_debug_fingerprint.py tests/utils/test_hunyuan_e2e_debug.py -q
+pytest --noconftest tests/diffusion/test_diffusion_request.py tests/utils/test_debug_fingerprint.py tests/utils/test_hunyuan_e2e_debug.py -q
 ```
 
 新增测试使用真实方法体和 CPU 模拟模型/scheduler，覆盖普通 forward 路径的日志可达性、
 开启/关闭探针后的输出与 RNG 状态一致、注入 KV 不被清空、完整摘要和 YAML 继承。
 这些检查不替代上述 NPU 端到端实验。
+
+## err2.log 后的复跑
+
+该请求正常返回 HTTP 200，AR 自然停止于 900 tokens、ratio_index=13，目标高×宽为
+832×1216。四个 TP rank 的 AR→DiT 全层 KV send/receive/dit_request 摘要一致，
+有效传输长度 2135=1236+900−1；这份日志未显示该边界传输损坏。
+但 DiT 实际 guidance=5、尺寸为 1024×1024，不能计为原计划中 CFG 关闭的有效样本。
+
+四次 `dit_injected_kv` 报错的直接原因是探针假设每层仅一个分支，实际 CFG 负向 prefill
+把 `_injected_ar_kv` 扩展为正/负两个分支。修复后探针按真实 CFG 模式分别记录，
+仍会对缺失 KV 或分支数不符报错；并未删除检查或吞掉缺失数据。
+之前 CPU 路径测试直接构造 provided=true 的采样参数，未覆盖 YAML 到请求初始化的
+零值处理；现已补充真实初始化方法和 T2I/IT2I 预处理回归检查。
+
+更新代码及 YAML 后，先重启 PD 贪心配置并用原 seed=42 请求跑一次，核对：
+
+1. `dit_request` 的 `guidance_scale=0`、`sampling_guidance_scale=0`、`guidance_scale_provided=true`。
+2. DiT 尺寸等于本次 AR bridge 的目标尺寸；若 AR 仍为上述 900 tokens/ratio=13，应为高 832、宽 1216。
+3. 四个 rank 都有 `dit_condition`，其中 TP=4、SP=1、CFG world size=1、`cfg_enabled=false`；
+   四个 rank 都有完整 `dit_injected_kv` 正分支日志，且无 `probe_error`。
+4. 50 步完成并正常返回图片；日志图片尺寸和客户端解码尺寸都应与目标一致。
+
+该次成功样本可直接计为 PD 贪心组第 1 次，再连续请求第 2 次；随后执行非 PD 贪心两次并比较。
+贪心两组通过后，继续原随机两组，各两次；不需要重新执行 AR 边界实验。
+旧 err2.log 保留为诊断记录，不与修复后样本混用。
+
+err2.log 中初始 latent 四个 rank 相同，但第 1 步起 rank 0/1 与 rank 2/3 的 prediction/
+latent 已分成两组，最终像素也不同。现有日志不足以确定原因，更不能据此认定 PD/非 PD
+不同。复跑时核对上述实际并行信息；若 CFG 关闭后仍有这种分组，先保存该次四 rank
+完整日志与 latent 文件定位，不进入随机和性能实验。

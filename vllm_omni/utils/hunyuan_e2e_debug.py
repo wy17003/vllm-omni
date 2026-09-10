@@ -75,18 +75,22 @@ class HunyuanE2EProbe:
                 tensors={"timestep": timestep, "prediction": prediction, "latents": latents},
             )
 
-    def injected_kv(self, layers):
+    def injected_kv(self, layers, branch_roles=("positive",)):
         # Do not call _snapshot_injected_ar_kv: it clears the live layer state.
         try:
-            keys, values = [], []
-            for layer in layers:
+            caches = [([], []) for _ in branch_roles]
+            if not caches:
+                raise ValueError("Expected at least one KV branch")
+            for index, layer in enumerate(layers):
                 entries = layer.self_attn.image_attn._injected_ar_kv
-                if entries is None or len(entries) != 1:
-                    raise ValueError("Expected one injected AR KV branch per layer (CFG disabled)")
-                key, value = entries[0]
-                keys.append(key)
-                values.append(value)
-            self.record("dit_injected_kv", kv=(keys, values))
+                if entries is None or len(entries) != len(branch_roles):
+                    count = None if entries is None else len(entries)
+                    raise ValueError(f"Layer {index}: expected KV branches {branch_roles}, got {count}")
+                for (keys, values), (key, value) in zip(caches, entries):
+                    keys.append(key)
+                    values.append(value)
+            for role, cache in zip(branch_roles, caches):
+                self.record("dit_injected_kv", kv=cache, branch=role, branch_count=len(branch_roles))
         except Exception:
             logger.exception(
                 "[HY3_E2E] event=probe_error request_id=%s tp_rank=%s source_event=dit_injected_kv",

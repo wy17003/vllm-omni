@@ -3079,7 +3079,9 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                 tensors={"latents": latents, "timesteps": timesteps, "sigmas": getattr(self.scheduler, "sigmas", None)},
                 generator_initial_seeds=[g.initial_seed() if g is not None else None for g in generators],
                 scheduler=type(self.scheduler).__name__,
-                scheduler_config=dict(self.scheduler.config),
+                scheduler_config={
+                    key: value for key, value in self.scheduler.config.items() if not key.startswith("_")
+                },
                 image_size=image_size,
                 guidance_scale=guidance_scale,
                 num_inference_steps=num_inference_steps,
@@ -3141,8 +3143,18 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
                 ar_kv_reuse_len=ar_kv_reuse_len,
                 query_lens=model_kwargs["query_lens"],
                 seq_lens=model_kwargs["seq_lens"],
+                cfg_enabled=bool(self.do_classifier_free_guidance),
+                cfg_parallel=bool(cfg_parallel_ready),
+                cfg_rank=cfg_rank,
+                tp_world_size=get_tensor_model_parallel_world_size(),
+                sp_world_size=get_sequence_parallel_world_size(),
+                cfg_world_size=get_classifier_free_guidance_world_size(),
             )
-            debug_probe.injected_kv(self.model.model.layers)
+            if cfg_parallel_ready:
+                branch_roles = ("negative",) if cfg_rank == 1 else ("positive",)
+            else:
+                branch_roles = ("positive", "negative") if self.do_classifier_free_guidance else ("positive",)
+            debug_probe.injected_kv(self.model.model.layers, branch_roles=branch_roles)
 
         # Sampling loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order

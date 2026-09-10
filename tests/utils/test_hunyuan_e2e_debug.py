@@ -74,8 +74,12 @@ def test_probe_reads_injected_kv_without_clearing_and_saves_exact_latents(caplog
 def _method(path, cls_name, method, namespace):
     """Execute the real method body with CPU fakes, without loading NPU/model dependencies."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name)
-    node = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == method)
+    if cls_name is None:
+        nodes = ast.walk(tree)
+    else:
+        cls = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name)
+        nodes = cls.body
+    node = next(node for node in nodes if isinstance(node, ast.FunctionDef) and node.name == method)
     node.decorator_list = []
     module = ast.Module(
         body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0), node],
@@ -83,6 +87,53 @@ def _method(path, cls_name, method, namespace):
     )
     exec(compile(ast.fix_missing_locations(module), str(path), "exec"), namespace)
     return namespace[method]
+
+
+@pytest.mark.parametrize(
+    "prompt,explicit,expected",
+    [
+        ({"prompt": "cat", "height": 832, "width": 1216}, (None, None), (832, 1216)),
+        ({"prompt": "cat", "height": 832, "width": 1216}, (512, 768), (512, 768)),
+        ("cat", (None, None), (None, None)),
+        ({"prompt": "cat", "multi_modal_data": {"image": "image"}}, (None, None), (600, 800)),
+        (
+            {"prompt": "cat", "height": 832, "width": 1216, "multi_modal_data": {"image": "image"}},
+            (None, None),
+            (832, 1216),
+        ),
+    ],
+)
+def test_preprocess_transfers_bridge_size_for_text_and_image_inputs(prompt, explicit, expected):
+    preprocess = _method(
+        MODEL_DIR / "pipeline_hunyuan_image3.py",
+        None,
+        "pre_process_func",
+        {
+            "OmniTextPrompt": dict,
+            "_build_cond_joint_image": lambda image: {"fake": image},
+            "_to_pil_image": lambda image: SimpleNamespace(size=(800, 600)),
+        },
+    )
+    params = SimpleNamespace(height=explicit[0], width=explicit[1])
+    req = SimpleNamespace(prompts=[prompt], sampling_params=params)
+    assert preprocess(req) is req
+    assert (params.height, params.width) == expected
+
+
+def test_probe_reports_cfg_branches_separately_without_mutation(caplog):
+    caplog.set_level(logging.INFO)
+    key = torch.arange(12).reshape(3, 2, 2)
+    entries = [(key, key.clone()), (key + 10, key + 20)]
+    layer = SimpleNamespace(self_attn=SimpleNamespace(image_attn=SimpleNamespace(_injected_ar_kv=entries)))
+    probe = HunyuanE2EProbe("cfg-request", 0, {})
+    probe.injected_kv([layer], branch_roles=("positive", "negative"))
+    rows = _events(caplog)
+    assert [data["branch"] for _, data in rows] == ["positive", "negative"]
+    assert rows[0][1]["kv"]["sha256"] != rows[1][1]["kv"]["sha256"]
+    assert layer.self_attn.image_attn._injected_ar_kv is entries
+    assert "probe_error" not in caplog.text
+    probe.injected_kv([layer])
+    assert "expected KV branches ('positive',), got 2" in caplog.text
 
 
 def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(caplog, monkeypatch):
@@ -94,6 +145,9 @@ def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(
         "retrieve_timesteps": lambda scheduler, count, *args: (torch.arange(count, 0, -1), count),
         "set_forward_context_denoise_step_idx": lambda step: None,
         "HunyuanImage3Text2ImagePipelineOutput": lambda samples: (samples,),
+        "get_tensor_model_parallel_world_size": lambda: 4,
+        "get_sequence_parallel_world_size": lambda: 1,
+        "get_classifier_free_guidance_world_size": lambda: 1,
     }
     call = _method(
         MODEL_DIR / "hunyuan_image3_transformer.py", "HunyuanImage3Text2ImagePipeline", "__call__", namespace
@@ -248,6 +302,11 @@ def test_e2e_yaml_resolved_sampling_and_npu_layout():
         assert p["env"]["VLLM_MOONCAKE_BOOTSTRAP_PORT"] == "25201"
         for config in (non_pd, pd):
             stages = config["stages"]
+            dit_params = stages[-1]["default_sampling_params"]
+            post_init = _method(ROOT / "vllm_omni/diffusion/request.py", "OmniDiffusionRequest", "__post_init__", {})
+            sampling = SimpleNamespace(**dit_params, generator=None, guidance_scale_2=None)
+            post_init(SimpleNamespace(request_id="yaml-test", prompts=["cat"], sampling_params=sampling))
+            assert sampling.guidance_scale == 0 and sampling.guidance_scale_provided is True
             assert stages[-1]["step_execution"] is False
             assert stages[-1]["omni_kv_config"]["need_recv_cache"] is True
             assert stages[-1]["omni_kv_config"]["debug_e2e"] is True

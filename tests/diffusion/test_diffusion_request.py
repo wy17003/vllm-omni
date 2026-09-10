@@ -72,3 +72,18 @@ def test_tp_seed_same_across_ranks_and_varies_across_requests():
 
     # Seeds must vary across requests (non-determinism preserved).
     assert len(set(seeds)) == n_requests, f"Expected {n_requests} unique seeds but got {len(set(seeds))}: {seeds}"
+
+
+@pytest.mark.parametrize(
+    "scale,provided,expected_scale,expected_provided",
+    [(0.0, True, 0.0, True), (0.0, False, 1.0, False), (5.0, False, 5.0, True), (1.0, False, 1.0, True)],
+)
+def test_request_initialization_preserves_explicit_zero(scale, provided, expected_scale, expected_provided):
+    params = OmniDiffusionSamplingParams(seed=42, guidance_scale=scale, guidance_scale_provided=provided)
+    req = OmniDiffusionRequest(request_id="request", prompts=["cat"], sampling_params=params)
+    assert params.guidance_scale == expected_scale
+    assert params.guidance_scale_provided is expected_provided
+    assert params.guidance_scale_2 == expected_scale
+    if provided:
+        req.__post_init__()
+        assert params.guidance_scale == scale

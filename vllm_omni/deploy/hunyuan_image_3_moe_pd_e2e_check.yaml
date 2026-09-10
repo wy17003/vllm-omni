@@ -51,3 +51,4 @@ stages:
       seed: 42
       num_inference_steps: 50
       guidance_scale: 0
+      guidance_scale_provided: true

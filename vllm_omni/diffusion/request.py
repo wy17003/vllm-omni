@@ -40,11 +40,12 @@ class OmniDiffusionRequest:
             self.sampling_params.seed = random.randint(0, 2**31 - 1)
 
         # Detect whether user explicitly provided guidance_scale.
-        # The sentinel default is 0.0 (false-like); any truthy value means
-        # the caller set it intentionally.  We must resolve this BEFORE
+        # The sentinel default is 0.0; the explicit-provision flag distinguishes
+        # an intentional zero from that default. Nonzero values remain implicit
+        # opt-ins for existing callers. We must resolve this BEFORE
         # auto-filling guidance_scale_2, otherwise the sentinel leaks into
         # guidance_scale_2.
-        if self.sampling_params.guidance_scale:
+        if self.sampling_params.guidance_scale_provided or self.sampling_params.guidance_scale:
             self.sampling_params.guidance_scale_provided = True
         else:
             self.sampling_params.guidance_scale = 1.0

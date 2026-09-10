@@ -339,6 +339,14 @@ def get_hunyuan_image_3_pre_process_func(od_config: OmniDiffusionConfig):
             if "additional_information" not in prompt:
                 prompt["additional_information"] = {}
 
+            # The AR bridge carries the target size for T2I as well as IT2I.
+            # Populate sampling before the pipeline falls back to 1024x1024;
+            # retain the existing priority of explicitly set sampling dimensions.
+            if request.sampling_params.height is None and prompt.get("height") is not None:
+                request.sampling_params.height = int(prompt["height"])
+            if request.sampling_params.width is None and prompt.get("width") is not None:
+                request.sampling_params.width = int(prompt["width"])
+
             multi_modal_data = prompt.get("multi_modal_data") or {}
             raw_images = multi_modal_data.get("image")
             if raw_images is None:
@@ -349,13 +357,11 @@ def get_hunyuan_image_3_pre_process_func(od_config: OmniDiffusionConfig):
                 cond_image_infos = [_build_cond_joint_image(image) for image in image_list]
                 prompt["additional_information"]["batch_cond_image_info"] = cond_image_infos
 
-                bridge_h = prompt.get("height") if isinstance(prompt, dict) else None
-                bridge_w = prompt.get("width") if isinstance(prompt, dict) else None
                 first_image_w, first_image_h = _to_pil_image(image_list[0]).size
                 if request.sampling_params.width is None:
-                    request.sampling_params.width = int(bridge_w or first_image_w)
+                    request.sampling_params.width = int(first_image_w)
                 if request.sampling_params.height is None:
-                    request.sampling_params.height = int(bridge_h or first_image_h)
+                    request.sampling_params.height = int(first_image_h)
 
             request.prompts[i] = prompt
 
@@ -2439,6 +2445,12 @@ class HunyuanImage3Pipeline(
                 num_inference_steps=num_inference_steps,
                 guidance_scale=guidance_scale,
                 layer_ids=layer_ids,
+                sampling_guidance_scale=req.sampling_params.guidance_scale,
+                guidance_scale_provided=req.sampling_params.guidance_scale_provided,
+                ar_ratio_indices=[
+                    item.get("extra", {}).get("ar_ratio_index") if isinstance(item, dict) else None
+                    for item in req.prompts
+                ],
                 kv=([ar_kv[i]["key"] for i in layer_ids], [ar_kv[i]["value"] for i in layer_ids]),
             )
             model_inputs["_hy3_e2e_probe"] = probe
