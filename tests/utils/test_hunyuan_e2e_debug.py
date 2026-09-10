@@ -136,7 +136,10 @@ def test_probe_reports_cfg_branches_separately_without_mutation(caplog):
     assert "expected KV branches ('positive',), got 2" in caplog.text
 
 
-def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(caplog, monkeypatch):
+@pytest.mark.parametrize("request_id", ["request", "dummy_req_id"])
+def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(
+    caplog, monkeypatch, tmp_path, request_id
+):
     caplog.set_level(logging.INFO)
     namespace = {
         "torch": torch,
@@ -157,7 +160,24 @@ def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(
         MODEL_DIR / "pipeline_hunyuan_image3.py",
         "HunyuanImage3Pipeline",
         "forward",
-        {"logger": logging.getLogger(__name__), "DiffusionOutput": SimpleNamespace},
+        {
+            "logger": logging.getLogger(__name__),
+            "DiffusionOutput": SimpleNamespace,
+            "OmniDiffusionRequest": type(
+                "Request",
+                (),
+                {
+                    "is_dummy_run_request_id": classmethod(
+                        _method(
+                            ROOT / "vllm_omni/diffusion/request.py",
+                            "OmniDiffusionRequest",
+                            "is_dummy_run_request_id",
+                            {"DUMMY_DIFFUSION_REQUEST_ID": "dummy_req_id"},
+                        )
+                    )
+                },
+            ),
+        },
     )
     monkeypatch.setitem(
         sys.modules,
@@ -214,7 +234,9 @@ def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(
     )
     wrapper._extract_prompt_inputs = lambda *args, **kwargs: (["cat"], ["CoT"], "system", None, "think")
     wrapper._normalize_cot_text = lambda text: text
-    wrapper._extract_ar_kv_from_request = lambda req: {"ar_kv_data": {0: {"key": tensor, "value": tensor}}}
+    wrapper._extract_ar_kv_from_request = lambda req: (
+        {} if request_id == "dummy_req_id" else {"ar_kv_data": {0: {"key": tensor, "value": tensor}}}
+    )
     wrapper.prepare_model_inputs = lambda **kwargs: {
         **kwargs,
         "batch_gen_image_info": [info],
@@ -225,8 +247,10 @@ def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(
     def run(enabled):
         generator = torch.Generator().manual_seed(43)
         wrapper.od_config = SimpleNamespace(omni_kv_config={"debug_e2e": enabled}, step_execution=False)
+        if request_id == "dummy_req_id":
+            wrapper.od_config.omni_kv_config["debug_e2e_dump_dir"] = str(tmp_path)
         req = SimpleNamespace(
-            request_id="request",
+            request_id=request_id,
             prompts=["cat"],
             sampling_params=SimpleNamespace(
                 generator=generator,
@@ -246,6 +270,11 @@ def test_ordinary_forward_reaches_denoise_probes_without_changing_output_or_rng(
     observed, observed_rng = run(True)
     assert observed == baseline
     assert torch.equal(observed_rng, baseline_rng)
+    if request_id == "dummy_req_id":
+        assert seen == [None, None]
+        assert "[HY3_E2E]" not in caplog.text
+        assert list(tmp_path.iterdir()) == []
+        return
     assert seen[0] is None and isinstance(seen[1], HunyuanE2EProbe)
     events = _events(caplog)
     assert [event for event, _ in events] == [

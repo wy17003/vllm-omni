@@ -2426,7 +2426,9 @@ class HunyuanImage3Pipeline(
         model_inputs.update(ar_kv_kwargs)
 
         debug_config = getattr(self.od_config, "omni_kv_config", None) or {}
-        if debug_config.get("debug_e2e", False):
+        # Warmup bypasses AR/KV transfer and uses its own synthetic inputs.
+        # Do not fingerprint or dump it as an end-to-end experiment request.
+        if debug_config.get("debug_e2e", False) and not OmniDiffusionRequest.is_dummy_run_request_id(req.request_id):
             from vllm_omni.distributed.omni_connectors.utils.kv_utils import get_local_tp_rank
             from vllm_omni.utils.hunyuan_e2e_debug import HunyuanE2EProbe
 

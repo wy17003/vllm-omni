@@ -156,5 +156,27 @@ pytest --noconftest tests/diffusion/test_diffusion_request.py tests/utils/test_d
 
 err2.log 中初始 latent 四个 rank 相同，但第 1 步起 rank 0/1 与 rank 2/3 的 prediction/
 latent 已分成两组，最终像素也不同。现有日志不足以确定原因，更不能据此认定 PD/非 PD
-不同。复跑时核对上述实际并行信息；若 CFG 关闭后仍有这种分组，先保存该次四 rank
-完整日志与 latent 文件定位，不进入随机和性能实验。
+不同。后续 non_pd_greedy/pd_greedy 各两次请求已证明：关闭 CFG 后两种部署仍共有
+相同分组，但逐 rank 的全部 54 项观测记录及返回结果一致。因此本请求贪心对照通过，
+共有的跨 rank 现象单独记录，不阻塞 PD/非 PD 随机采样等价实验。
+
+## 启动日志 err3/err4
+
+`err3.log` 的 KV 探针异常全部属于 `request_id=dummy_req_id`。这是引擎内部预热，
+不经过 AR，接收器明确跳过 KV 接收；没有传入/注入 KV 是预期行为。旧探针错误地套用
+真实请求的完整 KV 要求，捕获异常后打印 ERROR，故不导致启动失败。
+预热的随机 seed、512×512、1 步、guidance=5 也不能用于判断正式实验参数是否生效。
+现已在 forward 入口跳过该保留 ID 的 E2E 探针与文件保存，预热计算仍照常执行；
+真实请求缺失 KV 时仍保留错误检查。既有贪心真实请求结果无需重跑。
+
+`err4.log` 的致命原因是 stage 0（P）在 NPU 设备初始化时未通过空闲内存检查：
+两张卡分别只有 44.98/45.37 GiB 空闲，而 0.8×约 61.27 GiB 要求约 49.02 GiB。
+此时尚未进入 P 的实际请求采样，后续 Engine core/Orchestrator 失败及清理超时均属连带结果。
+日志不能确定额外占用来自哪个进程，不据此归因于 temperature 或 RNG 状态传递。
+
+继续实验前用 `npu-smi info` 检查配置中的 P 卡组（默认 4–7；若设置了设备可见性，
+按实际映射核对），定位占用进程。停止确认属于上一轮服务的残留进程或协调其他任务释放资源，
+确认 P 每卡空闲内存满足约 49.02 GiB 的启动门槛并有余量，再按原 pd_rng 配置启动。
+优先保留 `gpu_memory_utilization: 0.8`。降低比例可能绕过当前门槛，却不保证后续模型加载和
+KV 容量足够；若环境要求调整，应作为明确记录的实验配置变更，而非修改 temperature/seed。
+成功拉起后继续 seed=43、PD/非 PD 各两次请求的原计划。
