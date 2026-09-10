@@ -1,0 +1,6 @@
+# P derives AR sampling parameters from D, including request seed=43.
+base_config: hunyuan_image_3_moe_pd_e2e_check.yaml
+stages:
+  - stage_id: 1
+    default_sampling_params:
+      temperature: 1.0

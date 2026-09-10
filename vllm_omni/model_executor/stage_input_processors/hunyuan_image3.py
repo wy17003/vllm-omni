@@ -182,7 +182,7 @@ def ar2diffusion(
         logger.info(
             "[HY3_EQ] ar request_id=%s output_token_count=%s output_token_sha256=%s "
             "output_token_ids=%s generated_text_sha256=%s cot_text_sha256=%s ratio_index=%s "
-            "target_height=%s target_width=%s ar_generated_text=%s",
+            "target_height=%s target_width=%s ar_generated_text=%s finish_reason=%s stop_reason=%s",
             request_id,
             len(generated_token_ids),
             int_sequence_fingerprint(generated_token_ids),
@@ -193,6 +193,8 @@ def ar2diffusion(
             height,
             width,
             json.dumps(cot_text_for_dit, ensure_ascii=False),
+            getattr(output, "finish_reason", None),
+            getattr(output, "stop_reason", None),
         )
 
         logger.info(

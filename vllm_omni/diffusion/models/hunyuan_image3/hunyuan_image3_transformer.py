@@ -2979,6 +2979,7 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
         | None = None,
         callback_on_step_end_tensor_inputs: list[str] = ["latents"],
         model_kwargs: dict[str, Any] | None = None,
+        debug_probe: Any = None,
         **kwargs,
     ):
         r"""
@@ -3071,6 +3072,18 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             latents=latents,
         )
 
+        if debug_probe is not None:
+            generators = generator if isinstance(generator, list) else [generator]
+            debug_probe.record(
+                "dit_initial",
+                tensors={"latents": latents, "timesteps": timesteps, "sigmas": getattr(self.scheduler, "sigmas", None)},
+                generator_initial_seeds=[g.initial_seed() if g is not None else None for g in generators],
+                scheduler=type(self.scheduler).__name__,
+                scheduler_config=dict(self.scheduler.config),
+                image_size=image_size,
+                guidance_scale=guidance_scale,
+                num_inference_steps=num_inference_steps,
+            )
         # Prepare extra step kwargs.
         _scheduler_step_extra_kwargs = self.prepare_extra_func_kwargs(self.scheduler.step, {"generator": generator})
 
@@ -3117,6 +3130,19 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
 
         # Store ar_kv_reuse_len in model_kwargs for use in forward method (SP mode)
         model_kwargs["ar_kv_reuse_len"] = ar_kv_reuse_len
+        if debug_probe is not None:
+            condition_tensors = {name: value for name, value in model_kwargs.items() if isinstance(value, torch.Tensor)}
+            condition_tensors["input_ids"] = input_ids
+            for index, value in enumerate(model_kwargs.get("custom_pos_emb") or ()):
+                condition_tensors[f"custom_pos_emb_{index}"] = value
+            debug_probe.record(
+                "dit_condition",
+                tensors=condition_tensors,
+                ar_kv_reuse_len=ar_kv_reuse_len,
+                query_lens=model_kwargs["query_lens"],
+                seq_lens=model_kwargs["seq_lens"],
+            )
+            debug_probe.injected_kv(self.model.model.layers)
 
         # Sampling loop
         num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
@@ -3191,6 +3217,8 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
 
                 # Scheduler step (all ranks compute locally in CFG parallel)
                 latents = self.scheduler.step(pred, t, latents, **_scheduler_step_extra_kwargs, return_dict=False)[0]
+                if debug_probe is not None:
+                    debug_probe.denoise(i + 1, len(timesteps), t, pred, latents)
                 if i != len(timesteps) - 1 and should_compute:
                     model_kwargs = self.model._update_model_kwargs_for_generation(  # noqa
                         model_output,
@@ -3220,6 +3248,9 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
 
         set_forward_context_denoise_step_idx(None)
 
+        if debug_probe is not None:
+            debug_probe.record("dit_final", tensors={"latents": latents})
+
         if hasattr(self.vae.config, "scaling_factor") and self.vae.config.scaling_factor:
             latents = latents / self.vae.config.scaling_factor
         if hasattr(self.vae.config, "shift_factor") and self.vae.config.shift_factor:
@@ -3236,7 +3267,11 @@ class HunyuanImage3Text2ImagePipeline(DiffusionPipeline):
             image = image.squeeze(2)
 
         do_denormalize = [True] * image.shape[0]
+        if debug_probe is not None:
+            debug_probe.record("vae_output", tensors={"image": image})
         image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
+        if debug_probe is not None and output_type == "pil":
+            debug_probe.record("image", images=image)
 
         if not return_dict:
             return (image,)

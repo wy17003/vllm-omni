@@ -148,3 +148,44 @@ def tensor_fingerprint(tensor: torch.Tensor, sample_count: int | None = None) ->
             std=float(stats.std(unbiased=False).item()),
         )
     return result
+
+
+def full_tensor_digest(tensor: torch.Tensor, chunk_bytes: int = 4 * 1024 * 1024) -> dict[str, Any]:
+    """Hash every logical element without copying an entire KV cache to CPU.
+
+    Layout strides and physical block IDs are deliberately excluded. Each
+    chunk is copied synchronously; this helper is only for correctness runs.
+    """
+    if chunk_bytes <= 0:
+        raise ValueError("chunk_bytes must be positive")
+    flat = tensor.detach().contiguous().reshape(-1)
+    elements = max(1, chunk_bytes // tensor.element_size())
+    digest = hashlib.sha256()
+    for start in range(0, flat.numel(), elements):
+        chunk = flat[start : start + elements].to(device="cpu").contiguous()
+        digest.update(chunk.view(torch.uint8).numpy().tobytes())
+    return {
+        "shape": list(tensor.shape),
+        "dtype": str(tensor.dtype),
+        "numel": tensor.numel(),
+        "scope": "full",
+        "sha256": digest.hexdigest(),
+    }
+
+
+def full_kv_fingerprint(key_cache, value_cache) -> dict[str, Any]:
+    """Fingerprint all layers, including dtype/shape and layer ordering."""
+    if not key_cache or len(key_cache) != len(value_cache):
+        raise ValueError("Full KV check requires nonempty, paired key/value layers")
+    entries = []
+    for index, (key, value) in enumerate(zip(key_cache, value_cache)):
+        for name, tensor in (("key", key), ("value", value)):
+            if not isinstance(tensor, torch.Tensor) or tensor.numel() == 0:
+                raise ValueError(f"Missing or empty {name} tensor for layer {index}")
+            entries.append({"layer": index, "cache": name, **full_tensor_digest(tensor)})
+    return {
+        "scope": "full",
+        "num_layers": len(key_cache),
+        "sha256": text_fingerprint(json.dumps(entries, sort_keys=True, separators=(",", ":"))),
+        "layers": entries,
+    }

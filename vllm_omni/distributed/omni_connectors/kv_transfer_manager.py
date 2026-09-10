@@ -16,7 +16,7 @@ from vllm.logger import init_logger
 
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.platforms import current_omni_platform
-from vllm_omni.utils.debug_fingerprint import tensor_fingerprint
+from vllm_omni.utils.debug_fingerprint import full_kv_fingerprint, tensor_fingerprint
 
 from .factory import OmniConnectorFactory
 from .utils.config import TRANSFER_ENGINE_CONNECTOR_NAMES, ConnectorSpec
@@ -135,6 +135,7 @@ class OmniKVCacheConfig:
     enable_kv_async_prefetch: bool = False
     kv_prefetch_min_free_mem_ratio: float = 0.0
     debug_fingerprint: bool = False
+    debug_full_fingerprint: bool = False
 
 
 @dataclass
@@ -424,7 +425,7 @@ class OmniKVTransferManager:
         return self._topo_config
 
     def _log_kv_fingerprints(self, event: str, request_id: str, data: Any) -> None:
-        if not self.config.debug_fingerprint:
+        if not (self.config.debug_fingerprint or self.config.debug_full_fingerprint):
             return
         try:
             if isinstance(data, KVCacheTransferData):
@@ -436,6 +437,15 @@ class OmniKVTransferManager:
 
             key_cache = layer_blocks.get("key_cache", [])
             value_cache = layer_blocks.get("value_cache", [])
+            if self.config.debug_full_fingerprint:
+                logger.info(
+                    "[HY3_EQ] kv_full event=%s request_id=%s tp_rank=%s seq_len=%s data=%s",
+                    event,
+                    request_id,
+                    get_local_tp_rank(),
+                    metadata.get("seq_len"),
+                    json.dumps(full_kv_fingerprint(key_cache, value_cache), sort_keys=True, separators=(",", ":")),
+                )
             num_layers = max(len(key_cache), len(value_cache))
             layer_indices = sorted({0, num_layers // 2, num_layers - 1}) if num_layers else []
             samples = []
@@ -491,6 +501,7 @@ class OmniKVTransferManager:
                 enable_kv_async_prefetch=async_prefetch,
                 kv_prefetch_min_free_mem_ratio=cfg.get("kv_prefetch_min_free_mem_ratio", 0.0),
                 debug_fingerprint=cfg.get("debug_fingerprint", False),
+                debug_full_fingerprint=cfg.get("debug_full_fingerprint", False),
             ),
             async_prefetch=async_prefetch,
         )

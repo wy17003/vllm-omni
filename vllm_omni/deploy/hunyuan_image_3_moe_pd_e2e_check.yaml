@@ -1,0 +1,53 @@
+# NPU 1P1D: keep P synchronous, D asynchronous, and validated KV/RNG handoff.
+base_config: hunyuan_image_3_moe_pd.yaml
+stages:
+  - stage_id: 0
+    async_scheduling: false
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25201"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "0"
+      VLLM_OMNI_HY3_AR_RNG_DEBUG: "0"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+  - stage_id: 1
+    async_scheduling: true
+    env:
+      VLLM_HOST_IP: "127.0.0.1"
+      VLLM_MOONCAKE_BOOTSTRAP_PORT: "25202"
+      VLLM_OMNI_HY3_AR_EQ_DEBUG: "0"
+      VLLM_OMNI_HY3_AR_RNG_DEBUG: "0"
+      VLLM_OMNI_HY3_KV_CAUSAL_MODE: "off"
+    omni_kv_config:
+      need_send_cache: true
+      debug_fingerprint: true
+      debug_full_fingerprint: true
+    default_sampling_params:
+      temperature: 0.0
+      seed: 42
+      top_p: 1.0
+      top_k: -1
+      n: 1
+      max_tokens: 8192
+      min_tokens: 0
+      repetition_penalty: 1.0
+      presence_penalty: 0.0
+      frequency_penalty: 0.0
+      ignore_eos: false
+      extra_args:
+        pd_resume_from_prefill: true
+        pd_rng_repro_without_state: false
+  - stage_id: 2
+    step_execution: false
+    omni_kv_config:
+      need_recv_cache: true
+      debug_fingerprint: true
+      debug_full_fingerprint: true
+      enable_kv_async_prefetch: true
+      kv_prefetch_min_free_mem_ratio: 0.2
+      debug_e2e: true
+      debug_denoise_steps: [1, 10, 25, 50]
+      debug_e2e_dump_dir: /tmp/hy3-e2e/pd
+    default_sampling_params:
+      seed: 42
+      num_inference_steps: 50
+      guidance_scale: 0

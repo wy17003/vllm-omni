@@ -1,0 +1,6 @@
+# Request seed=43 overrides default 42 for both AR and DiT.
+base_config: hunyuan_image_3_moe_e2e_check.yaml
+stages:
+  - stage_id: 0
+    default_sampling_params:
+      temperature: 1.0

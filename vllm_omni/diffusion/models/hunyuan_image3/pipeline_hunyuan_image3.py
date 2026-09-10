@@ -1598,6 +1598,7 @@ class HunyuanImage3Pipeline(
         generator: list[torch.Generator] | None = None,
         **kwargs,
     ):
+        debug_probe = kwargs.pop("_hy3_e2e_probe", None)
         mode = kwargs.get("mode", "gen_text")
         # verbose > 1 not support
         if mode == "gen_text":
@@ -1626,6 +1627,7 @@ class HunyuanImage3Pipeline(
                 guidance_scale=kwargs.get("guidance_scale", 5.0),
                 generator=generator,
                 model_kwargs=kwargs,
+                debug_probe=debug_probe,
             )
             samples = results[0]
             return samples
@@ -2416,6 +2418,30 @@ class HunyuanImage3Pipeline(
         )
 
         model_inputs.update(ar_kv_kwargs)
+
+        debug_config = getattr(self.od_config, "omni_kv_config", None) or {}
+        if debug_config.get("debug_e2e", False):
+            from vllm_omni.distributed.omni_connectors.utils.kv_utils import get_local_tp_rank
+            from vllm_omni.utils.hunyuan_e2e_debug import HunyuanE2EProbe
+
+            probe = HunyuanE2EProbe(req.request_id, get_local_tp_rank(), debug_config)
+            ar_kv = ar_kv_kwargs.get("ar_kv_data", {})
+            layer_ids = sorted(ar_kv)
+            probe.record(
+                "dit_request",
+                prompt=prompt,
+                cot_text=cot_text,
+                system_prompt=system_prompt,
+                bot_task=tokenizer_bot_task,
+                seed=req.sampling_params.seed,
+                height=height,
+                width=width,
+                num_inference_steps=num_inference_steps,
+                guidance_scale=guidance_scale,
+                layer_ids=layer_ids,
+                kv=([ar_kv[i]["key"] for i in layer_ids], [ar_kv[i]["value"] for i in layer_ids]),
+            )
+            model_inputs["_hy3_e2e_probe"] = probe
 
         outputs = self._generate(**model_inputs, **kwargs)
         custom_output = {}
