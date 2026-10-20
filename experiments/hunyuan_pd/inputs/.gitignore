@@ -1,0 +1,7 @@
+# Curated experiment inputs must travel with the scripts despite root JSON ignores.
+!short.jsonl
+!long.jsonl
+!mixed.jsonl
+!catalog.jsonl
+!audit.json
+!schedule_manifest.json

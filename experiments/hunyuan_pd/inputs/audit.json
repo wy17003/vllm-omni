@@ -1,0 +1,98 @@
+{
+  "source_candidate_count": 65,
+  "selected_source_count": 32,
+  "paired_prompt_count": 64,
+  "duplicate_source_groups": [
+    [
+      "TXT-029",
+      "TXT-030"
+    ]
+  ],
+  "selected_source_ids": [
+    "MD-01",
+    "MD-02",
+    "MD-03",
+    "MD-04",
+    "MD-05",
+    "MD-06",
+    "MD-07",
+    "MD-08",
+    "TXT-001",
+    "TXT-002",
+    "TXT-003",
+    "TXT-005",
+    "TXT-007",
+    "TXT-008",
+    "TXT-009",
+    "TXT-017",
+    "TXT-025",
+    "TXT-027",
+    "TXT-028",
+    "TXT-029",
+    "TXT-031",
+    "TXT-033",
+    "TXT-034",
+    "TXT-036",
+    "TXT-038",
+    "TXT-043",
+    "TXT-044",
+    "TXT-046",
+    "TXT-047",
+    "TXT-050",
+    "TXT-054",
+    "TXT-057"
+  ],
+  "excluded_source_ids": [
+    "TXT-004",
+    "TXT-006",
+    "TXT-010",
+    "TXT-011",
+    "TXT-012",
+    "TXT-013",
+    "TXT-014",
+    "TXT-015",
+    "TXT-016",
+    "TXT-018",
+    "TXT-019",
+    "TXT-020",
+    "TXT-021",
+    "TXT-022",
+    "TXT-023",
+    "TXT-024",
+    "TXT-026",
+    "TXT-030",
+    "TXT-032",
+    "TXT-035",
+    "TXT-037",
+    "TXT-039",
+    "TXT-040",
+    "TXT-041",
+    "TXT-042",
+    "TXT-045",
+    "TXT-048",
+    "TXT-049",
+    "TXT-051",
+    "TXT-052",
+    "TXT-053",
+    "TXT-055",
+    "TXT-056"
+  ],
+  "source_files": {
+    "Hunyuan-Image3.md": "7868e6e91f57eb846ac1585362cf6b18a7ff5be24d135c6b8eeab3aec516b9e7",
+    "prompt.txt": "bde84de16415cf25ea8d29aa0d2967ee1f7e71199450dbf9285d87926c21a623",
+    "prompt_utils.py": "a71ac945a8fb25022a3d79a0b54821bcc526848a502043d493d83edc406a61c5"
+  },
+  "note": "prompt_utils.py contains prompt-rewriting instructions, not independent t2i samples; it was not executed.",
+  "length_stats": {
+    "short": {
+      "count": 32,
+      "min_chars": 96,
+      "max_chars": 369
+    },
+    "long": {
+      "count": 32,
+      "min_chars": 489,
+      "max_chars": 2402
+    }
+  }
+}
