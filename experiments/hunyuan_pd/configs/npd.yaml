@@ -1,0 +1,96 @@
+# NPU performance experiment; fixed TP4 per stage. See ../EXPERIMENT.md.
+pipeline: hunyuan_image_3_moe
+async_chunk: false
+trust_remote_code: true
+enable_prefix_caching: true
+enable_chunked_prefill: true
+connectors:
+  rdma_connector:
+    name: MooncakeTransferEngineConnector
+    extra:
+      host: auto
+      zmq_port: 50051
+      protocol: rdma
+      device_name: ''
+      memory_pool_size: 4294967296
+      memory_pool_device: cpu
+  yuanrong_te_connector:
+    name: YuanrongTransferEngineConnector
+    extra:
+      host: auto
+      zmq_port: 50051
+      rpc_port: auto
+      protocol: ascend
+      device_name: auto
+      memory_pool_size: 1073741824
+      memory_pool_device: npu
+  shared_memory_connector:
+    name: SharedMemoryConnector
+    extra:
+      shm_threshold_bytes: 65536
+stages:
+- stage_id: 0
+  final_output: true
+  final_output_type: text
+  env:
+    VLLM_OMNI_HY3_AR_EQ_DEBUG: '0'
+  max_num_seqs: 32
+  gpu_memory_utilization: 0.8
+  enforce_eager: true
+  max_num_batched_tokens: 8192
+  devices: 4,5,6,7
+  tensor_parallel_size: 4
+  hf_overrides:
+    rope_parameters:
+      mrope_section:
+      - 0
+      - 32
+      - 32
+      rope_type: default
+  omni_kv_config:
+    need_send_cache: true
+    debug_fingerprint: false
+  output_connectors:
+    to_stage_1: shared_memory_connector
+  default_sampling_params:
+    temperature: 0.0
+    top_p: 1
+    top_k: -1
+    max_tokens: 8192
+    detokenize: true
+    skip_special_tokens: false
+    include_stop_str_in_output: true
+    seed: 42
+- stage_id: 1
+  max_num_seqs: 1
+  enforce_eager: true
+  devices: 8,9,10,11
+  distributed_executor_backend: mp
+  omni_kv_config:
+    need_recv_cache: true
+    debug_fingerprint: false
+    enable_kv_async_prefetch: true
+    kv_prefetch_min_free_mem_ratio: 0.2
+  parallel_config:
+    tensor_parallel_size: 4
+    enable_expert_parallel: false
+    sequence_parallel_size: 1
+    ulysses_degree: 1
+  input_connectors:
+    from_stage_0: shared_memory_connector
+  default_sampling_params:
+    num_inference_steps: 50
+    guidance_scale: 0
+  gpu_memory_utilization: 0.65
+  max_num_batched_tokens: 8192
+  env:
+    VLLM_OMNI_HY3_AR_EQ_DEBUG: '0'
+  step_execution: false
+  diffusion_attention_config:
+    default:
+      backend: TORCH_SDPA
+edges:
+- from: 0
+  to: 1
+  window_size: -1
+  max_inflight: 1

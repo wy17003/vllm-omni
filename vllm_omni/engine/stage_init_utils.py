@@ -371,6 +371,10 @@ def extract_stage_metadata(stage_config: Any) -> StageMetadata:
     final_output_type: str | None = getattr(stage_config, "final_output_type", None)
 
     default_sp = _to_dict(getattr(stage_config, "default_sampling_params", {}))
+    if stage_type == "diffusion" and default_sp.get("guidance_scale") is not None:
+        # A YAML scale of zero is explicit too; do not replace it with the
+        # pipeline's fallback CFG scale during request normalization.
+        default_sp = dict(default_sp, guidance_scale_provided=True)
     SPClass = SamplingParams if stage_type == "llm" else OmniDiffusionSamplingParams
     default_sampling_params: OmniSamplingParams = SPClass(**default_sp)
 

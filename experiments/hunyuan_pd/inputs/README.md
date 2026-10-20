@@ -1,6 +1,7 @@
 # HunyuanImage3 PD 实验输入
 
-基于测试分支 `test/support_hunyuanimage3_pd_disaggregation` / `ec5d4de05` 整理。
+基于测试分支 `test/support_hunyuanimage3_pd_disaggregation` 整理。
+当前完整方案见 [EXPERIMENT.md](../EXPERIMENT.md)，正式运行使用上一级schedule中的逐轮清单。
 来源 `D:\Data\pdd\Exp` 保持原样；本目录包含加工后的输入、来源记录和重建工具。
 
 ## 数据与数量
@@ -30,28 +31,20 @@ TXT-047同段包含两个变体，只采用第二个；去除参考图依赖、�
 较短源文增加同主题场景细节，记录在catalog中。`prompt_utils.py`是改写提示词及代码，
 不计为独立样本，也未执行。未选块不计入本次容量，并不意味着它们全部不可用。
 
-**每批内禁止重复文本**，不通过更换seed扩充样本；三轮、PD/非PD复用对应输入（已确认）。
-统一seed=42。旧的short_128、long_128和mixed_256重复负载已移除。
-32条/纯组足以覆盖当前AR最大C=32及完整t2i最大C=24；混合只需分别16对和12对。
-若未来纯组C>32或混合C>64，须补足独立文本，脚本不会循环取样。
-不同并发取同一池的前缀，共享样本一致；不同请求数时不能保证整批相同或token分布完全匹配。
+**每批内禁止重复文本**，不通过换seed扩充；跨轮、PD/非PD可以复用。
+正式输入已在../schedule/冻结，包含PD24、非PD12/16各组各三轮，共27个文件。
+每批25%英文，混合组严格长短各半；非PD为对应PD批次子集，每轮轮换部分主题。
+按语言和同语言内字符长度近似匹配，无需模型tokenizer，无需人工再选输入。
+目前纯组32条足够C24轮换，但不够三轮完全不重复；当前约束允许轮间复用。
+文件SHA256、主题ID、字符分层统计和重合数见../schedule/manifest.json。
 
-## 长度校准
+## token校准改为可选
 
-以上是Unicode字符数，不是token数。公共system prompt会缩小完整输入的相对长度差，
-中英文字符数也不可直接对比。目前未加载本地模型tokenizer，不把这些输入称作2K/4K/8K桶。
-“详细版”是否足够长以触发PD收益仍需校准，不能仅凭文本数量作结论。
-
-在推理服务器仓库根目录执行，仅加载tokenizer：
-
-```bash
-python experiments/hunyuan_pd/inputs/calibrate_tokens.py \
-  --model /new_data/HunyuanImage-3.0-Instruct/
-```
-
-输出token_calibration.json，包括裸用户输入和通过本分支
-`build_prompt_tokens(task='t2i', bot_task='think', sys_type='en_unified')` 构建的完整输入长度，
-以及2K/4K/8K覆盖和组间重叠；同时核对服务端实际prompt_token_count。
+字符数不是token数。公共system prompt会缩小完整输入相对长度差，中英文字符数不可直接当token比较。
+短/长是现有文本分类，未宣称2K/4K/8K桶；本轮取消token校准前置要求。
+如果后续需要解释长输入收益，可在推理环境运行calibrate_tokens.py，只加载tokenizer，
+记录裸输入和build_prompt_tokens(task=t2i, bot_task=think, sys_type=en_unified)的完整长度。
+不因性能结果反向筛选输入；本轮直接使用已经冻结的清单。
 
 ## 尺寸与参数
 
@@ -61,19 +54,17 @@ python experiments/hunyuan_pd/inputs/calibrate_tokens.py \
 
 显式size会影响think模式AR停止语义（`</think>` / `</recaption>`，而auto路径通常继续到比例token）。
 给定curl未设置size，本实验保留显式size以保证同一实际尺寸；不能混用两条路径的成绩。
-AR-only也必须复现模板、尺寸与停止语义。统一en_unified、think、50步、guidance_scale=0.0、seed=42。
-最新要求禁止关闭prefix caching：基础部署目前仍为false，启动实验前需在所用配置中设为true，
-并核对最终AR/P/D配置；客户端无法替服务切换。三轮复用输入可能命中缓存，第三轮是缓存开启、
-重复输入预热后的成绩，需记录命中情况，不能全部归因于PD分离。探针默认一轮，正式实验仍为三轮取第三轮。
+所有请求统一en_unified、think、50步、guidance_scale=0.0、seed=42，始终为完整t2i。
+prefix caching必须开启，本轮step_execution=false、DiT max_num_seqs=1，实验专用配置已提供。
+轮换主题不清空缓存；不同部署和C的历史重复比例不同，第三轮不是同一批请求的第三次重复。
+保留所有轮次，不把缓存开启下的全部收益归因于PD分离。
 
-实际图片仍须在推理设备上验证PNG为1024×1024，不允许事后resize冒充相同工作量。
-相同尺寸不保证相同AR KV复用长度或实际DiT合批率。当前未执行真实模型出图。
+实际图片仍须在推理设备验证PNG为1024×1024，不允许事后resize冒充相同工作量。
+本地尚未执行真实模型出图。
 
 ## 使用
 
-参考上一级PROBE.md。探测脚本按group和C生成恰好N=C的batch.jsonl，支持prepare-only。
-当前CustomDataset按num-prompts截取；若超过文件行数，则循环重复取样。正式benchmark应使用
-生成的C行batch.jsonl，显式设num-prompts=C、max-concurrency=C、request-rate=inf，避免默认请求数
-触发重复。batch.jsonl额外保留width/height，因为benchmark后端用它们构造size。
-`catalog.jsonl`含元数据，仅用于审阅，不应作为HTTP压测输入。
-完整t2i客户端接口不能提供全部内部AR/KV分解指标，仍需要服务端埋点；探测脚本不是完整性能采集器。
+推荐运行../run_experiment.py，按../EXPERIMENT.md先PD全部点，再非PD全部点。
+客户端输出每轮roundN_inputs/batch.jsonl，恰好C行；若改用benchmark，需显式设置num-prompts=C，
+否则CustomDataset可能循环取样。batch.jsonl保留width/height，因benchmark后端用它们构造size。
+catalog.jsonl包含来源元数据，不是直接发送的HTTP请求正文。

@@ -1,0 +1,1341 @@
+{
+  "version": 1,
+  "selection": "language + existing short/long groups + within-language character length; NOT token calibrated",
+  "catalog_sha256": "b2c03169dd9bd8f2561b8b90424b810235ff5376278cef9bceb20250473b138b",
+  "rounds": 3,
+  "selected_round": 3,
+  "points": [
+    {
+      "deployment": "pd",
+      "group": "short",
+      "concurrency": 24,
+      "batches": [
+        {
+          "round": 1,
+          "path": "pd-short-c24/round1.jsonl",
+          "sha256": "62dd246589a8d9132948198a969b05a26c3e05bac852d7d93b964ae6501e3c79",
+          "ids": [
+            "scene20_short",
+            "scene19_short",
+            "scene26_short",
+            "scene29_short",
+            "scene01_short",
+            "scene13_short",
+            "scene05_short",
+            "scene06_short",
+            "scene04_short",
+            "scene32_short",
+            "scene11_short",
+            "scene17_short",
+            "scene21_short",
+            "scene23_short",
+            "scene09_short",
+            "scene18_short",
+            "scene31_short",
+            "scene10_short",
+            "scene12_short",
+            "scene03_short",
+            "scene22_short",
+            "scene02_short",
+            "scene27_short",
+            "scene28_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "short_zh": {
+              "n": 18,
+              "mean_chars": 106.83333333333333,
+              "median_chars": 107.5,
+              "min_chars": 96,
+              "max_chars": 113
+            },
+            "short_en": {
+              "n": 6,
+              "mean_chars": 346.3333333333333,
+              "median_chars": 347.0,
+              "min_chars": 329,
+              "max_chars": 358
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "pd-short-c24/round2.jsonl",
+          "sha256": "690556bf9c67006da181fe805d7e9c2f119c83f724aab08a6a95337f734ee3d4",
+          "ids": [
+            "scene17_short",
+            "scene18_short",
+            "scene06_short",
+            "scene16_short",
+            "scene09_short",
+            "scene24_short",
+            "scene26_short",
+            "scene27_short",
+            "scene20_short",
+            "scene23_short",
+            "scene05_short",
+            "scene14_short",
+            "scene22_short",
+            "scene08_short",
+            "scene25_short",
+            "scene11_short",
+            "scene04_short",
+            "scene19_short",
+            "scene21_short",
+            "scene12_short",
+            "scene15_short",
+            "scene30_short",
+            "scene10_short",
+            "scene07_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 16,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "short_zh": {
+              "n": 18,
+              "mean_chars": 110.38888888888889,
+              "median_chars": 109.0,
+              "min_chars": 103,
+              "max_chars": 125
+            },
+            "short_en": {
+              "n": 6,
+              "mean_chars": 349.6666666666667,
+              "median_chars": 351.5,
+              "min_chars": 329,
+              "max_chars": 369
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "pd-short-c24/round3.jsonl",
+          "sha256": "ae0ca1c003422cb1eab0d92801abf9a0d124032fe70a6a3eba658338e3afa884",
+          "ids": [
+            "scene20_short",
+            "scene16_short",
+            "scene18_short",
+            "scene30_short",
+            "scene32_short",
+            "scene08_short",
+            "scene07_short",
+            "scene25_short",
+            "scene31_short",
+            "scene03_short",
+            "scene15_short",
+            "scene24_short",
+            "scene14_short",
+            "scene02_short",
+            "scene12_short",
+            "scene29_short",
+            "scene06_short",
+            "scene10_short",
+            "scene28_short",
+            "scene01_short",
+            "scene11_short",
+            "scene13_short",
+            "scene04_short",
+            "scene05_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 24,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "short_zh": {
+              "n": 18,
+              "mean_chars": 108.66666666666667,
+              "median_chars": 108.0,
+              "min_chars": 96,
+              "max_chars": 125
+            },
+            "short_en": {
+              "n": 6,
+              "mean_chars": 348.1666666666667,
+              "median_chars": 347.0,
+              "min_chars": 329,
+              "max_chars": 369
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "npd",
+      "group": "short",
+      "concurrency": 12,
+      "batches": [
+        {
+          "round": 1,
+          "path": "npd-short-c12/round1.jsonl",
+          "sha256": "fb01c6d79de8ae29030cac0c2b1a031916fd75f1d235e79fb73fd4e91f813b95",
+          "ids": [
+            "scene20_short",
+            "scene29_short",
+            "scene13_short",
+            "scene06_short",
+            "scene04_short",
+            "scene17_short",
+            "scene31_short",
+            "scene10_short",
+            "scene12_short",
+            "scene22_short",
+            "scene02_short",
+            "scene27_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "short_zh": {
+              "n": 9,
+              "mean_chars": 106.88888888888889,
+              "median_chars": 107,
+              "min_chars": 99,
+              "max_chars": 112
+            },
+            "short_en": {
+              "n": 3,
+              "mean_chars": 347.3333333333333,
+              "median_chars": 345,
+              "min_chars": 339,
+              "max_chars": 358
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "npd-short-c12/round2.jsonl",
+          "sha256": "2570d549c1c1d59de6b85479422ccdffcb11e4c4c7ab549e56539a917fa82bda",
+          "ids": [
+            "scene17_short",
+            "scene06_short",
+            "scene16_short",
+            "scene24_short",
+            "scene20_short",
+            "scene23_short",
+            "scene08_short",
+            "scene19_short",
+            "scene21_short",
+            "scene12_short",
+            "scene30_short",
+            "scene07_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 4,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "short_zh": {
+              "n": 9,
+              "mean_chars": 110.44444444444444,
+              "median_chars": 108,
+              "min_chars": 103,
+              "max_chars": 125
+            },
+            "short_en": {
+              "n": 3,
+              "mean_chars": 351,
+              "median_chars": 345,
+              "min_chars": 339,
+              "max_chars": 369
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "npd-short-c12/round3.jsonl",
+          "sha256": "0d0bd7082800718a806af8c06d4b6ad54aa2994978b48b95ae8e23a3772cd8dc",
+          "ids": [
+            "scene20_short",
+            "scene18_short",
+            "scene30_short",
+            "scene08_short",
+            "scene07_short",
+            "scene25_short",
+            "scene15_short",
+            "scene02_short",
+            "scene28_short",
+            "scene11_short",
+            "scene04_short",
+            "scene05_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 6,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "short_zh": {
+              "n": 9,
+              "mean_chars": 108.66666666666667,
+              "median_chars": 108,
+              "min_chars": 99,
+              "max_chars": 115
+            },
+            "short_en": {
+              "n": 3,
+              "mean_chars": 347.6666666666667,
+              "median_chars": 345,
+              "min_chars": 329,
+              "max_chars": 369
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "npd",
+      "group": "short",
+      "concurrency": 16,
+      "batches": [
+        {
+          "round": 1,
+          "path": "npd-short-c16/round1.jsonl",
+          "sha256": "df5049ba79d0eb53a94b4f340c45584d6b31737d994fbd9356acab32ddf97c3a",
+          "ids": [
+            "scene20_short",
+            "scene19_short",
+            "scene26_short",
+            "scene29_short",
+            "scene01_short",
+            "scene04_short",
+            "scene32_short",
+            "scene11_short",
+            "scene21_short",
+            "scene23_short",
+            "scene09_short",
+            "scene18_short",
+            "scene12_short",
+            "scene03_short",
+            "scene27_short",
+            "scene28_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "short_zh": {
+              "n": 12,
+              "mean_chars": 106.83333333333333,
+              "median_chars": 107.5,
+              "min_chars": 96,
+              "max_chars": 112
+            },
+            "short_en": {
+              "n": 4,
+              "mean_chars": 345.25,
+              "median_chars": 347.0,
+              "min_chars": 329,
+              "max_chars": 358
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "npd-short-c16/round2.jsonl",
+          "sha256": "89ab48495379e340bdc4c03cdd9f1c1439e36a51b94e65a97ee20e01f355f7db",
+          "ids": [
+            "scene17_short",
+            "scene06_short",
+            "scene16_short",
+            "scene09_short",
+            "scene26_short",
+            "scene27_short",
+            "scene20_short",
+            "scene23_short",
+            "scene05_short",
+            "scene25_short",
+            "scene11_short",
+            "scene04_short",
+            "scene19_short",
+            "scene30_short",
+            "scene10_short",
+            "scene07_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 8,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "short_zh": {
+              "n": 12,
+              "mean_chars": 110.41666666666667,
+              "median_chars": 109.0,
+              "min_chars": 103,
+              "max_chars": 125
+            },
+            "short_en": {
+              "n": 4,
+              "mean_chars": 350,
+              "median_chars": 351.5,
+              "min_chars": 339,
+              "max_chars": 358
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "npd-short-c16/round3.jsonl",
+          "sha256": "3543c2e279e94ddb25b4517048edc4a4ccf0af218b7b73fa21774f6add1db4c0",
+          "ids": [
+            "scene20_short",
+            "scene18_short",
+            "scene30_short",
+            "scene32_short",
+            "scene08_short",
+            "scene07_short",
+            "scene25_short",
+            "scene03_short",
+            "scene15_short",
+            "scene14_short",
+            "scene02_short",
+            "scene12_short",
+            "scene29_short",
+            "scene11_short",
+            "scene13_short",
+            "scene05_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 11,
+          "changed_from_previous_round": 10,
+          "strata": {
+            "short_zh": {
+              "n": 12,
+              "mean_chars": 108.66666666666667,
+              "median_chars": 108.0,
+              "min_chars": 99,
+              "max_chars": 116
+            },
+            "short_en": {
+              "n": 4,
+              "mean_chars": 348,
+              "median_chars": 347.0,
+              "min_chars": 329,
+              "max_chars": 369
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "pd",
+      "group": "long",
+      "concurrency": 24,
+      "batches": [
+        {
+          "round": 1,
+          "path": "pd-long-c24/round1.jsonl",
+          "sha256": "313257b11248d0e9b1e42e687ee4c61eb6d8cfdcf0d21d039c5a8445be0f6194",
+          "ids": [
+            "scene18_long",
+            "scene07_long",
+            "scene02_long",
+            "scene01_long",
+            "scene30_long",
+            "scene13_long",
+            "scene14_long",
+            "scene20_long",
+            "scene29_long",
+            "scene10_long",
+            "scene28_long",
+            "scene16_long",
+            "scene03_long",
+            "scene24_long",
+            "scene06_long",
+            "scene32_long",
+            "scene17_long",
+            "scene09_long",
+            "scene12_long",
+            "scene05_long",
+            "scene23_long",
+            "scene25_long",
+            "scene15_long",
+            "scene31_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "long_zh": {
+              "n": 18,
+              "mean_chars": 663.1666666666666,
+              "median_chars": 597.5,
+              "min_chars": 489,
+              "max_chars": 1021
+            },
+            "long_en": {
+              "n": 6,
+              "mean_chars": 1751.5,
+              "median_chars": 1728.5,
+              "min_chars": 1348,
+              "max_chars": 2189
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "pd-long-c24/round2.jsonl",
+          "sha256": "dd604d653fba7fa55acb5fcba702905ff5f23b34f6b103669111f7fb2caab6c4",
+          "ids": [
+            "scene16_long",
+            "scene32_long",
+            "scene20_long",
+            "scene26_long",
+            "scene06_long",
+            "scene22_long",
+            "scene02_long",
+            "scene15_long",
+            "scene18_long",
+            "scene24_long",
+            "scene14_long",
+            "scene27_long",
+            "scene23_long",
+            "scene08_long",
+            "scene21_long",
+            "scene28_long",
+            "scene29_long",
+            "scene07_long",
+            "scene03_long",
+            "scene12_long",
+            "scene04_long",
+            "scene11_long",
+            "scene09_long",
+            "scene19_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 16,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "long_zh": {
+              "n": 18,
+              "mean_chars": 829.6111111111111,
+              "median_chars": 663.5,
+              "min_chars": 533,
+              "max_chars": 1520
+            },
+            "long_en": {
+              "n": 6,
+              "mean_chars": 1812.6666666666667,
+              "median_chars": 1765.0,
+              "min_chars": 1348,
+              "max_chars": 2402
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "pd-long-c24/round3.jsonl",
+          "sha256": "6ea18080822d5795bd32bb2fe15ac34c3bbc577b3bb6e8a623289bda7388730d",
+          "ids": [
+            "scene18_long",
+            "scene26_long",
+            "scene32_long",
+            "scene11_long",
+            "scene10_long",
+            "scene08_long",
+            "scene19_long",
+            "scene21_long",
+            "scene17_long",
+            "scene05_long",
+            "scene04_long",
+            "scene22_long",
+            "scene27_long",
+            "scene25_long",
+            "scene12_long",
+            "scene01_long",
+            "scene20_long",
+            "scene09_long",
+            "scene31_long",
+            "scene30_long",
+            "scene28_long",
+            "scene13_long",
+            "scene29_long",
+            "scene14_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 24,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "long_zh": {
+              "n": 18,
+              "mean_chars": 788.7777777777778,
+              "median_chars": 611.0,
+              "min_chars": 489,
+              "max_chars": 1520
+            },
+            "long_en": {
+              "n": 6,
+              "mean_chars": 1800.5,
+              "median_chars": 1728.5,
+              "min_chars": 1348,
+              "max_chars": 2402
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "npd",
+      "group": "long",
+      "concurrency": 12,
+      "batches": [
+        {
+          "round": 1,
+          "path": "npd-long-c12/round1.jsonl",
+          "sha256": "67556b37ea39c2f2b7557d87d5f6875f01945f90e9d39dc9a3aff053d9502b61",
+          "ids": [
+            "scene18_long",
+            "scene02_long",
+            "scene14_long",
+            "scene20_long",
+            "scene29_long",
+            "scene28_long",
+            "scene16_long",
+            "scene03_long",
+            "scene09_long",
+            "scene12_long",
+            "scene25_long",
+            "scene31_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "long_zh": {
+              "n": 9,
+              "mean_chars": 663.1111111111111,
+              "median_chars": 576,
+              "min_chars": 505,
+              "max_chars": 1021
+            },
+            "long_en": {
+              "n": 3,
+              "mean_chars": 1672.6666666666667,
+              "median_chars": 1422,
+              "min_chars": 1407,
+              "max_chars": 2189
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "npd-long-c12/round2.jsonl",
+          "sha256": "97ba66e91b0deb80401122c02e5cbf15760b0af0cf126cb90def18b906b19db4",
+          "ids": [
+            "scene20_long",
+            "scene22_long",
+            "scene02_long",
+            "scene18_long",
+            "scene14_long",
+            "scene27_long",
+            "scene08_long",
+            "scene21_long",
+            "scene28_long",
+            "scene29_long",
+            "scene11_long",
+            "scene19_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 6,
+          "changed_from_previous_round": 6,
+          "strata": {
+            "long_zh": {
+              "n": 9,
+              "mean_chars": 829.5555555555555,
+              "median_chars": 603,
+              "min_chars": 572,
+              "max_chars": 1500
+            },
+            "long_en": {
+              "n": 3,
+              "mean_chars": 1743.6666666666667,
+              "median_chars": 1422,
+              "min_chars": 1407,
+              "max_chars": 2402
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "npd-long-c12/round3.jsonl",
+          "sha256": "62329880de6b709377547f598097d27cb43a6a460adcc55d5d20385226d8f18b",
+          "ids": [
+            "scene18_long",
+            "scene26_long",
+            "scene08_long",
+            "scene19_long",
+            "scene17_long",
+            "scene05_long",
+            "scene22_long",
+            "scene12_long",
+            "scene20_long",
+            "scene31_long",
+            "scene28_long",
+            "scene13_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 8,
+          "changed_from_previous_round": 6,
+          "strata": {
+            "long_zh": {
+              "n": 9,
+              "mean_chars": 788.7777777777778,
+              "median_chars": 619,
+              "min_chars": 523,
+              "max_chars": 1520
+            },
+            "long_en": {
+              "n": 3,
+              "mean_chars": 1743.6666666666667,
+              "median_chars": 1422,
+              "min_chars": 1407,
+              "max_chars": 2402
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "npd",
+      "group": "long",
+      "concurrency": 16,
+      "batches": [
+        {
+          "round": 1,
+          "path": "npd-long-c16/round1.jsonl",
+          "sha256": "45ab707933221b3c64191decc2aa8adad1c3317d2a96c799e38ea994fbc91edb",
+          "ids": [
+            "scene18_long",
+            "scene07_long",
+            "scene02_long",
+            "scene01_long",
+            "scene29_long",
+            "scene10_long",
+            "scene28_long",
+            "scene16_long",
+            "scene03_long",
+            "scene24_long",
+            "scene32_long",
+            "scene09_long",
+            "scene12_long",
+            "scene25_long",
+            "scene15_long",
+            "scene31_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "long_zh": {
+              "n": 12,
+              "mean_chars": 663.0833333333334,
+              "median_chars": 597.5,
+              "min_chars": 505,
+              "max_chars": 893
+            },
+            "long_en": {
+              "n": 4,
+              "mean_chars": 1748.5,
+              "median_chars": 1728.5,
+              "min_chars": 1348,
+              "max_chars": 2189
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "npd-long-c16/round2.jsonl",
+          "sha256": "4baa45ee7adac95439adfddeb2a149a9af869c3bf75c270ad88ae8bd04df528b",
+          "ids": [
+            "scene32_long",
+            "scene26_long",
+            "scene06_long",
+            "scene02_long",
+            "scene15_long",
+            "scene18_long",
+            "scene14_long",
+            "scene27_long",
+            "scene23_long",
+            "scene08_long",
+            "scene21_long",
+            "scene28_long",
+            "scene29_long",
+            "scene03_long",
+            "scene12_long",
+            "scene11_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 8,
+          "changed_from_previous_round": 8,
+          "strata": {
+            "long_zh": {
+              "n": 12,
+              "mean_chars": 829.3333333333334,
+              "median_chars": 663.5,
+              "min_chars": 544,
+              "max_chars": 1520
+            },
+            "long_en": {
+              "n": 4,
+              "mean_chars": 1820,
+              "median_chars": 1765.0,
+              "min_chars": 1348,
+              "max_chars": 2402
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "npd-long-c16/round3.jsonl",
+          "sha256": "9e24094d04eeda703afe663d2e66903b79ecb415a4d194d311247fd6dd5002c2",
+          "ids": [
+            "scene18_long",
+            "scene26_long",
+            "scene32_long",
+            "scene11_long",
+            "scene10_long",
+            "scene08_long",
+            "scene19_long",
+            "scene21_long",
+            "scene17_long",
+            "scene04_long",
+            "scene22_long",
+            "scene12_long",
+            "scene31_long",
+            "scene28_long",
+            "scene13_long",
+            "scene29_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 11,
+          "changed_from_previous_round": 7,
+          "strata": {
+            "long_zh": {
+              "n": 12,
+              "mean_chars": 789.0833333333334,
+              "median_chars": 611.0,
+              "min_chars": 572,
+              "max_chars": 1520
+            },
+            "long_en": {
+              "n": 4,
+              "mean_chars": 1801.75,
+              "median_chars": 1728.5,
+              "min_chars": 1348,
+              "max_chars": 2402
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "pd",
+      "group": "mixed",
+      "concurrency": 24,
+      "batches": [
+        {
+          "round": 1,
+          "path": "pd-mixed-c24/round1.jsonl",
+          "sha256": "60762666b2e202e3b376bed59250cabd4dd8bf448fba79569ba838e48dc0c2fa",
+          "ids": [
+            "scene32_short",
+            "scene01_long",
+            "scene16_long",
+            "scene25_long",
+            "scene23_short",
+            "scene24_long",
+            "scene13_long",
+            "scene06_short",
+            "scene32_long",
+            "scene01_short",
+            "scene20_long",
+            "scene31_short",
+            "scene31_long",
+            "scene29_short",
+            "scene02_short",
+            "scene18_short",
+            "scene05_long",
+            "scene03_short",
+            "scene10_long",
+            "scene28_short",
+            "scene13_short",
+            "scene17_short",
+            "scene17_long",
+            "scene30_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "short_zh": {
+              "n": 9,
+              "mean_chars": 104.22222222222223,
+              "median_chars": 106,
+              "min_chars": 96,
+              "max_chars": 109
+            },
+            "short_en": {
+              "n": 3,
+              "mean_chars": 339,
+              "median_chars": 339,
+              "min_chars": 329,
+              "max_chars": 349
+            },
+            "long_zh": {
+              "n": 9,
+              "mean_chars": 589.2222222222222,
+              "median_chars": 540,
+              "min_chars": 489,
+              "max_chars": 705
+            },
+            "long_en": {
+              "n": 3,
+              "mean_chars": 1596.6666666666667,
+              "median_chars": 1407,
+              "min_chars": 1348,
+              "max_chars": 2035
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "pd-mixed-c24/round2.jsonl",
+          "sha256": "faffe2637aa1e26d5eddfb98ec4d123dc6631cc8aaf83ba10ed2028a3fd9beb6",
+          "ids": [
+            "scene05_short",
+            "scene08_short",
+            "scene20_short",
+            "scene26_long",
+            "scene12_short",
+            "scene09_long",
+            "scene12_long",
+            "scene21_long",
+            "scene10_short",
+            "scene25_short",
+            "scene14_long",
+            "scene27_long",
+            "scene15_short",
+            "scene24_short",
+            "scene08_long",
+            "scene14_short",
+            "scene07_short",
+            "scene22_long",
+            "scene11_long",
+            "scene16_short",
+            "scene04_long",
+            "scene18_long",
+            "scene30_short",
+            "scene19_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": 24,
+          "strata": {
+            "short_zh": {
+              "n": 9,
+              "mean_chars": 112.55555555555556,
+              "median_chars": 113,
+              "min_chars": 107,
+              "max_chars": 125
+            },
+            "short_en": {
+              "n": 3,
+              "mean_chars": 357.3333333333333,
+              "median_chars": 358,
+              "min_chars": 345,
+              "max_chars": 369
+            },
+            "long_zh": {
+              "n": 9,
+              "mean_chars": 980.3333333333334,
+              "median_chars": 1021,
+              "min_chars": 576,
+              "max_chars": 1520
+            },
+            "long_en": {
+              "n": 3,
+              "mean_chars": 2004.3333333333333,
+              "median_chars": 2189,
+              "min_chars": 1422,
+              "max_chars": 2402
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "pd-mixed-c24/round3.jsonl",
+          "sha256": "28ce2bbb37a11a0dd43e63edc566ed6f0a0c00f965b555107992aff4d4d8ce8f",
+          "ids": [
+            "scene20_short",
+            "scene29_long",
+            "scene18_short",
+            "scene19_short",
+            "scene17_short",
+            "scene23_short",
+            "scene16_long",
+            "scene05_short",
+            "scene15_long",
+            "scene09_long",
+            "scene24_long",
+            "scene27_short",
+            "scene23_long",
+            "scene32_long",
+            "scene21_short",
+            "scene07_long",
+            "scene10_short",
+            "scene03_short",
+            "scene03_long",
+            "scene18_long",
+            "scene04_short",
+            "scene14_long",
+            "scene22_short",
+            "scene05_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 14,
+          "changed_from_previous_round": 18,
+          "strata": {
+            "short_zh": {
+              "n": 9,
+              "mean_chars": 107.88888888888889,
+              "median_chars": 107,
+              "min_chars": 101,
+              "max_chars": 113
+            },
+            "short_en": {
+              "n": 3,
+              "mean_chars": 344,
+              "median_chars": 345,
+              "min_chars": 329,
+              "max_chars": 358
+            },
+            "long_zh": {
+              "n": 9,
+              "mean_chars": 706.3333333333334,
+              "median_chars": 572,
+              "min_chars": 523,
+              "max_chars": 1021
+            },
+            "long_en": {
+              "n": 3,
+              "mean_chars": 1653,
+              "median_chars": 1422,
+              "min_chars": 1348,
+              "max_chars": 2189
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "npd",
+      "group": "mixed",
+      "concurrency": 12,
+      "batches": [
+        {
+          "round": 1,
+          "path": "npd-mixed-c12/round1.jsonl",
+          "sha256": "63b705ea44bdc1e236ac518549ad7a5a8877602f07c59dc9b55d185ca27ec6d7",
+          "ids": [
+            "scene32_short",
+            "scene01_long",
+            "scene16_long",
+            "scene23_short",
+            "scene13_long",
+            "scene01_short",
+            "scene20_long",
+            "scene29_short",
+            "scene18_short",
+            "scene05_long",
+            "scene13_short",
+            "scene30_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "short_zh": {
+              "n": 4,
+              "mean_chars": 104,
+              "median_chars": 105.5,
+              "min_chars": 96,
+              "max_chars": 109
+            },
+            "short_en": {
+              "n": 2,
+              "mean_chars": 339,
+              "median_chars": 339.0,
+              "min_chars": 329,
+              "max_chars": 349
+            },
+            "long_zh": {
+              "n": 5,
+              "mean_chars": 589.6,
+              "median_chars": 540,
+              "min_chars": 489,
+              "max_chars": 705
+            },
+            "long_en": {
+              "n": 1,
+              "mean_chars": 1407,
+              "median_chars": 1407,
+              "min_chars": 1407,
+              "max_chars": 1407
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "npd-mixed-c12/round2.jsonl",
+          "sha256": "a6b4fdda49a24a933c515fdc0c9d41b115ddd5f440d614ecc9621cb344340a58",
+          "ids": [
+            "scene05_short",
+            "scene12_long",
+            "scene21_long",
+            "scene10_short",
+            "scene25_short",
+            "scene27_long",
+            "scene24_short",
+            "scene08_long",
+            "scene14_short",
+            "scene07_short",
+            "scene18_long",
+            "scene19_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": 12,
+          "strata": {
+            "short_zh": {
+              "n": 5,
+              "mean_chars": 112,
+              "median_chars": 113,
+              "min_chars": 108,
+              "max_chars": 116
+            },
+            "short_en": {
+              "n": 1,
+              "mean_chars": 358,
+              "median_chars": 358,
+              "min_chars": 358,
+              "max_chars": 358
+            },
+            "long_zh": {
+              "n": 4,
+              "mean_chars": 990.5,
+              "median_chars": 943.0,
+              "min_chars": 576,
+              "max_chars": 1500
+            },
+            "long_en": {
+              "n": 2,
+              "mean_chars": 1912,
+              "median_chars": 1912.0,
+              "min_chars": 1422,
+              "max_chars": 2402
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "npd-mixed-c12/round3.jsonl",
+          "sha256": "192c426bcc124528719b2c66404f4d96352af64f7410e5c6596fb77499589a25",
+          "ids": [
+            "scene29_long",
+            "scene18_short",
+            "scene17_short",
+            "scene05_short",
+            "scene15_long",
+            "scene24_long",
+            "scene10_short",
+            "scene18_long",
+            "scene04_short",
+            "scene14_long",
+            "scene22_short",
+            "scene05_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 5,
+          "changed_from_previous_round": 9,
+          "strata": {
+            "short_zh": {
+              "n": 4,
+              "mean_chars": 108,
+              "median_chars": 106.5,
+              "min_chars": 106,
+              "max_chars": 113
+            },
+            "short_en": {
+              "n": 2,
+              "mean_chars": 343.5,
+              "median_chars": 343.5,
+              "min_chars": 329,
+              "max_chars": 358
+            },
+            "long_zh": {
+              "n": 5,
+              "mean_chars": 708.4,
+              "median_chars": 572,
+              "min_chars": 523,
+              "max_chars": 1021
+            },
+            "long_en": {
+              "n": 1,
+              "mean_chars": 1422,
+              "median_chars": 1422,
+              "min_chars": 1422,
+              "max_chars": 1422
+            }
+          }
+        }
+      ]
+    },
+    {
+      "deployment": "npd",
+      "group": "mixed",
+      "concurrency": 16,
+      "batches": [
+        {
+          "round": 1,
+          "path": "npd-mixed-c16/round1.jsonl",
+          "sha256": "30575ca150241fc9c4508af9ab2c98d7df36945223d88e08f92bef7767c48c6d",
+          "ids": [
+            "scene32_short",
+            "scene16_long",
+            "scene25_long",
+            "scene23_short",
+            "scene24_long",
+            "scene13_long",
+            "scene32_long",
+            "scene01_short",
+            "scene20_long",
+            "scene31_short",
+            "scene29_short",
+            "scene18_short",
+            "scene05_long",
+            "scene03_short",
+            "scene13_short",
+            "scene17_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": null,
+          "strata": {
+            "short_zh": {
+              "n": 6,
+              "mean_chars": 104.16666666666667,
+              "median_chars": 105.5,
+              "min_chars": 96,
+              "max_chars": 109
+            },
+            "short_en": {
+              "n": 2,
+              "mean_chars": 339,
+              "median_chars": 339.0,
+              "min_chars": 329,
+              "max_chars": 349
+            },
+            "long_zh": {
+              "n": 6,
+              "mean_chars": 584,
+              "median_chars": 536.5,
+              "min_chars": 505,
+              "max_chars": 705
+            },
+            "long_en": {
+              "n": 2,
+              "mean_chars": 1377.5,
+              "median_chars": 1377.5,
+              "min_chars": 1348,
+              "max_chars": 1407
+            }
+          }
+        },
+        {
+          "round": 2,
+          "path": "npd-mixed-c16/round2.jsonl",
+          "sha256": "b242ae9b321cd0922d6545d68ebea24138b325f62b101715d4e1352ad5c22692",
+          "ids": [
+            "scene08_short",
+            "scene20_short",
+            "scene12_short",
+            "scene12_long",
+            "scene25_short",
+            "scene14_long",
+            "scene27_long",
+            "scene08_long",
+            "scene14_short",
+            "scene07_short",
+            "scene11_long",
+            "scene16_short",
+            "scene04_long",
+            "scene18_long",
+            "scene30_short",
+            "scene19_long"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 0,
+          "changed_from_previous_round": 16,
+          "strata": {
+            "short_zh": {
+              "n": 6,
+              "mean_chars": 113,
+              "median_chars": 111.5,
+              "min_chars": 107,
+              "max_chars": 125
+            },
+            "short_en": {
+              "n": 2,
+              "mean_chars": 357,
+              "median_chars": 357.0,
+              "min_chars": 345,
+              "max_chars": 369
+            },
+            "long_zh": {
+              "n": 6,
+              "mean_chars": 1016.3333333333334,
+              "median_chars": 1075.5,
+              "min_chars": 576,
+              "max_chars": 1500
+            },
+            "long_en": {
+              "n": 2,
+              "mean_chars": 1912,
+              "median_chars": 1912.0,
+              "min_chars": 1422,
+              "max_chars": 2402
+            }
+          }
+        },
+        {
+          "round": 3,
+          "path": "npd-mixed-c16/round3.jsonl",
+          "sha256": "9b4dc713a4a353afa03016110ce9b6503dd8d66751f244de1b7eba4550da4961",
+          "ids": [
+            "scene29_long",
+            "scene18_short",
+            "scene19_short",
+            "scene17_short",
+            "scene23_short",
+            "scene16_long",
+            "scene05_short",
+            "scene15_long",
+            "scene24_long",
+            "scene23_long",
+            "scene32_long",
+            "scene10_short",
+            "scene18_long",
+            "scene04_short",
+            "scene14_long",
+            "scene22_short"
+          ],
+          "reused_from_earlier_rounds_in_this_point": 7,
+          "changed_from_previous_round": 14,
+          "strata": {
+            "short_zh": {
+              "n": 6,
+              "mean_chars": 107.83333333333333,
+              "median_chars": 106.5,
+              "min_chars": 103,
+              "max_chars": 113
+            },
+            "short_en": {
+              "n": 2,
+              "mean_chars": 343.5,
+              "median_chars": 343.5,
+              "min_chars": 329,
+              "max_chars": 358
+            },
+            "long_zh": {
+              "n": 6,
+              "mean_chars": 683.8333333333334,
+              "median_chars": 558.0,
+              "min_chars": 533,
+              "max_chars": 1021
+            },
+            "long_en": {
+              "n": 2,
+              "mean_chars": 1385,
+              "median_chars": 1385.0,
+              "min_chars": 1348,
+              "max_chars": 1422
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

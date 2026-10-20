@@ -2480,6 +2480,8 @@ def _build_hunyuan_edit_extra_args(
 def _update_if_not_none(object: Any, key: str, val: Any) -> None:
     if val is not None:
         setattr(object, key, val)
+        if key == "guidance_scale" and hasattr(object, "guidance_scale_provided"):
+            object.guidance_scale_provided = True
 
 
 def _normalize_image(image: Any) -> Any:

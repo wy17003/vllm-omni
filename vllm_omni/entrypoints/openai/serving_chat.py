@@ -1087,6 +1087,8 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         for key, value in kwargs.items():
             if value is not None and hasattr(obj, key):
                 setattr(obj, key, value)
+                if key == "guidance_scale" and hasattr(obj, "guidance_scale_provided"):
+                    obj.guidance_scale_provided = True
 
     def _should_check_for_unstreamed_tool_arg_tokens(
         self,
@@ -3330,6 +3332,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 gen_params.num_inference_steps = num_inference_steps
             if guidance_scale is not None:
                 gen_params.guidance_scale = guidance_scale
+                gen_params.guidance_scale_provided = True
             if true_cfg_scale is not None:
                 gen_params.true_cfg_scale = true_cfg_scale
             apply_declared_extra_args(gen_params, self._get_diffusion_extra_body_params(), extra_body)

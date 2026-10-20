@@ -1,4 +1,4 @@
-"""One or three N=C t2i probe batches against an already-started server.
+"""One or three N=C t2i batches against an already-started server.
 
 Checks request completion and PNG dimensions, not GPU headroom or AR timing.
 Uses Python standard library and curl. No model/server configuration is changed.
@@ -17,7 +17,64 @@ import subprocess
 import threading
 import time
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
+
+from summarize_metrics import parse_stage_metrics, summary
+
+
+def load_frozen_batch(path, group, concurrency, model):
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    if len(rows) != concurrency:
+        raise ValueError(f"{path}: expected exactly {concurrency} requests")
+    batch = []
+    for i, row in enumerate(rows, 1):
+        body = dict(row["request"])
+        expected = dict(
+            width=1024,
+            height=1024,
+            size="1024x1024",
+            n=1,
+            num_inference_steps=50,
+            guidance_scale=0.0,
+            seed=42,
+            bot_task="think",
+            use_system_prompt="en_unified",
+        )
+        if any(body.get(key) != value for key, value in expected.items()):
+            raise ValueError(f"{path}, row {i}: unexpected experiment parameters")
+        digest = hashlib.sha256(body["prompt"].encode()).hexdigest()
+        if digest != row["prompt_sha256"]:
+            raise ValueError(f"{path}, row {i}: prompt hash mismatch")
+        if row["group"] not in (("short", "long") if group == "mixed" else (group,)):
+            raise ValueError(f"{path}, row {i}: wrong group")
+        body.pop("width")
+        body.pop("height")
+        body.update(model=model, response_format="b64_json")
+        batch.append(
+            dict(row=i, id=row["id"], group=row["group"], language=row["language"], prompt_sha256=digest, body=body)
+        )
+    if len({normalized_prompt(item["body"]["prompt"]) for item in batch}) != concurrency:
+        raise ValueError(f"{path}: duplicate prompts")
+    if group == "mixed" and sum(item["group"] == "short" for item in batch) * 2 != concurrency:
+        raise ValueError(f"{path}: mixed batch must contain exactly half short prompts")
+    return batch
+
+
+def save_batch(directory, batch):
+    directory.mkdir(parents=True, exist_ok=False)
+    request_dir = directory / "request_bodies"
+    request_dir.mkdir()
+    for item in batch:
+        (request_dir / f"{item['row']:04d}.json").write_text(
+            json.dumps(item["body"], ensure_ascii=False), encoding="utf-8"
+        )
+    (directory / "batch.jsonl").write_text(
+        "".join(json.dumps(dict(item["body"], width=1024, height=1024), ensure_ascii=False) + "\n" for item in batch),
+        encoding="utf-8",
+    )
+    (directory / "requests.json").write_text(json.dumps(batch, ensure_ascii=False, indent=2), encoding="utf-8")
+    return request_dir
 
 
 def normalized_prompt(text):
@@ -131,6 +188,9 @@ def main():
     parser.add_argument("--model", default="/new_data/HunyuanImage-3.0-Instruct/")
     parser.add_argument("--group", choices=["short", "long", "mixed"], required=True)
     parser.add_argument("--concurrency", type=int, required=True)
+    parser.add_argument("--batch-files", type=Path, nargs="+", help="One frozen catalog JSONL per round")
+    parser.add_argument("--deployment", choices=("pd", "npd"), help="Stage mapping for existing AR log metrics")
+    parser.add_argument("--server-log", type=Path, help="Local, append-only server log; requires exclusive traffic")
     parser.add_argument(
         "--stage-max-num-seqs",
         type=int,
@@ -146,7 +206,7 @@ def main():
         type=int,
         choices=(1, 3),
         default=1,
-        help="One feasibility batch by default; 3 reuses identical inputs and selects the last round",
+        help="Select last round; batch-files supplies rotating inputs, otherwise reuse the same batch",
     )
     parser.add_argument("--input-dir", type=Path, default=Path(__file__).with_name("inputs"))
     parser.add_argument(
@@ -157,6 +217,10 @@ def main():
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("timeout must be positive")
+    if args.server_log and (not args.server_log.is_file() or not args.deployment):
+        parser.error("server-log must exist and requires --deployment")
+    if args.batch_files and len(args.batch_files) != args.rounds:
+        parser.error("Provide exactly one batch-file per round")
     if args.stage_max_num_seqs is not None and (
         len(args.stage_max_num_seqs) not in (2, 3) or any(n < 1 for n in args.stage_max_num_seqs)
     ):
@@ -164,7 +228,11 @@ def main():
     curl = shutil.which("curl")
     if not args.prepare_only and not curl:
         parser.error("curl executable is required (same --max-time semantics as the reference request)")
-    batch = make_batch(args.input_dir, args.group, args.concurrency, args.model)
+    if args.batch_files:
+        batches = [load_frozen_batch(p, args.group, args.concurrency, args.model) for p in args.batch_files]
+    else:
+        batch = make_batch(args.input_dir, args.group, args.concurrency, args.model)
+        batches = [batch] * args.rounds
     stage_limits = None
     config_tag = None
     if args.stage_max_num_seqs is not None:
@@ -174,26 +242,18 @@ def main():
             args.output_dir = args.output_dir.with_name(args.output_dir.name + "_" + config_tag)
     args.output_dir = args.output_dir.resolve()
     args.output_dir.mkdir(parents=True, exist_ok=False)
-    request_dir = args.output_dir / "request_bodies"
-    request_dir.mkdir()
-    for item in batch:
-        (request_dir / f"{item['row']:04d}.json").write_text(
-            json.dumps(item["body"], ensure_ascii=False), encoding="utf-8"
-        )
-    # Pin benchmark dimensions too: its backend derives size from width/height.
-    # Pass --num-prompts C; CustomDataset otherwise may cycle through this file.
-    (args.output_dir / "batch.jsonl").write_text(
-        "".join(json.dumps(dict(item["body"], width=1024, height=1024), ensure_ascii=False) + "\n" for item in batch),
-        encoding="utf-8",
-    )
-    (args.output_dir / "requests.json").write_text(json.dumps(batch, ensure_ascii=False, indent=2), encoding="utf-8")
+    request_dirs = [save_batch(args.output_dir / f"round{r}_inputs", batch) for r, batch in enumerate(batches, 1)]
     plan = dict(
         group=args.group,
         concurrency=args.concurrency,
-        num_requests_per_round=len(batch),
+        num_requests_per_round=args.concurrency,
         rounds=args.rounds,
         selected_round=args.rounds,
-        identical_requests_each_round=True,
+        identical_requests_each_round=all(b == batches[0] for b in batches),
+        batch_files=[str(p.resolve()) for p in args.batch_files] if args.batch_files else None,
+        batch_file_sha256=[hashlib.sha256(p.read_bytes()).hexdigest() for p in args.batch_files]
+        if args.batch_files
+        else None,
         timeout_s=args.timeout,
         prefix_caching="must remain enabled on AR/P/D; verify server configuration, not enforced by HTTP client",
         server_config_declaration={
@@ -204,8 +264,10 @@ def main():
         config_tag=config_tag,
         output_dir=str(args.output_dir),
         endpoint=args.base_url.rstrip("/") + "/v1/images/generations",
-        scope="t2i completion/size check only; AR and device telemetry require separate collection",
-        unique_prompts=len({row["prompt_sha256"] for row in batch}),
+        scope="Full t2i; client E2E and optional native stage TTFT/TPOT from existing logs",
+        deployment=args.deployment,
+        server_log=str(args.server_log.resolve()) if args.server_log else None,
+        unique_prompts_per_round=[len({row["prompt_sha256"] for row in batch}) for batch in batches],
         executed=False,
     )
     (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -219,8 +281,12 @@ def main():
     (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     final = None
     for round_number in range(1, args.rounds + 1):
+        batch = batches[round_number - 1]
+        request_dir = request_dirs[round_number - 1]
         response_dir = args.output_dir / f"round{round_number}_responses"
         response_dir.mkdir()
+        log_start = args.server_log.stat() if args.server_log else None
+        started_at = datetime.now(timezone.utc).isoformat()
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
             barrier = threading.Barrier(len(batch) + 1)
             futures = [
@@ -240,19 +306,39 @@ def main():
             barrier.wait(timeout=args.timeout)
             records = [future.result() for future in futures]
         wall_s = time.perf_counter() - start
+        ended_at = datetime.now(timezone.utc).isoformat()
         success_count = sum(row["success"] for row in records)
+        ar_metrics = None
+        if args.server_log:
+            log_end = args.server_log.stat()
+            if log_end.st_ino != log_start.st_ino or log_end.st_size < log_start.st_size:
+                ar_metrics = {"status": "N/A: server log rotated or truncated"}
+            else:
+                with args.server_log.open("rb") as stream:
+                    stream.seek(log_start.st_size)
+                    log_bytes = stream.read(log_end.st_size - log_start.st_size)
+                (args.output_dir / f"round{round_number}_server.log").write_bytes(log_bytes)
+                ar_metrics = parse_stage_metrics(
+                    log_bytes.decode("utf-8", errors="replace"), args.deployment, len(batch)
+                )
+                ar_metrics["log_byte_interval"] = [log_start.st_size, log_end.st_size]
         final = dict(
             round=round_number,
             success_count=success_count,
             request_count=len(batch),
             client_wall_s=wall_s,
             valid=success_count == len(batch),
+            started_at_utc=started_at,
+            ended_at_utc=ended_at,
+            e2e_s=summary([row["response_latency_s"] for row in records if row["success"]]),
+            ar_metrics=ar_metrics,
             records=records,
         )
         (args.output_dir / f"round{round_number}.json").write_text(
             json.dumps(final, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         print(f"round {round_number}: {success_count}/{len(batch)} passed, client wall={wall_s:.3f}s", flush=True)
+        print(json.dumps({"e2e_s": final["e2e_s"], "ar_metrics": ar_metrics}, ensure_ascii=False), flush=True)
         if not final["valid"]:
             plan.update(execution_status="failed", failed_round=round_number)
             (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -262,7 +348,12 @@ def main():
         valid=True,
         success_count=final["success_count"],
         client_wall_s=final["client_wall_s"],
-        note="Client wall includes response validation; use instrumented benchmark for formal throughput.",
+        e2e_s=final["e2e_s"],
+        ar_metrics=final["ar_metrics"],
+        note=(
+            "E2E is per-request curl latency including response write, excluding PNG validation. "
+            "AR metrics are stage-local."
+        ),
     )
     (args.output_dir / "selected_result.json").write_text(
         json.dumps(selected, ensure_ascii=False, indent=2), encoding="utf-8"
