@@ -72,8 +72,14 @@ def load_schedule(directory, deployment, model, tokenizer_path):
         raise ValueError("Expected exactly single then waves")
     seen = set()
     loaded = []
-    expected_count = 48 if deployment == "pd" else 24
+    profile = manifest.get("comparison_profile", "ar_cards_2x")
+    if profile not in ("ar_cards_2x", "total_cards_1p5x"):
+        raise ValueError(f"Unknown comparison profile: {profile}")
+    expected_count = 48 if deployment == "pd" else (32 if profile == "total_cards_1p5x" else 24)
     for point in points:
+        wave_sizes = [expected_count] if point["workload"] == "single" else [expected_count // 2] * 2
+        if point["requests"] != expected_count or point["wave_sizes"] != wave_sizes:
+            raise ValueError("Request/wave counts differ from comparison profile")
         path = (directory / point["path"]).resolve()
         if directory.resolve() not in path.parents:
             raise ValueError("Input path escapes schedule directory")
@@ -131,6 +137,8 @@ def save_provenance(destination, manifest, deployment):
 
 def run(args):
     manifest, points = load_schedule(args.schedule_dir, args.deployment, args.model, args.tokenizer_json)
+    if not args.prepare_only and any(point.get("action") == "reuse_run03" for point, _ in points):
+        raise ValueError("This supplement reuses completed run03 PD results; execute only --deployment npd")
     tokenizer = load_tokenizer(args.tokenizer_json)
     curl = shutil.which("curl")
     if not args.prepare_only and (not curl or not args.server_log or not args.server_log.is_file()):
@@ -180,6 +188,9 @@ def run(args):
             max_inflight_http=len(batch),
             trace_clock="single-host monotonic_ns",
             deployment=args.deployment,
+            comparison_profile=manifest.get("comparison_profile", "ar_cards_2x"),
+            ar_cards=8 if args.deployment == "pd" else 4,
+            total_cards=12 if args.deployment == "pd" else 8,
             executed=not args.prepare_only,
         )
         write_json(folder / "plan.json", plan)
@@ -211,6 +222,9 @@ def run(args):
         audit = audit_tokens(log, batch, tokenizer)
         metrics = parse_stage_metrics(log, args.deployment, len(batch))
         trace = summarize_trace(log, batch, records, audit, args.deployment)
+        trace["output_tokens_per_s_per_total_card"] = (
+            trace["output_tokens_per_s"] / plan["total_cards"] if trace["complete"] else None
+        )
         result.update(
             token_audit=audit, ar_metrics=metrics, ar_trace=trace, log_byte_interval=[before.st_size, after.st_size]
         )

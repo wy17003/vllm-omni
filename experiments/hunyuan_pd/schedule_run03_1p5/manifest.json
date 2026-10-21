@@ -1,0 +1,84 @@
+{
+  "version": 3,
+  "rounds": 1,
+  "max_num_batched_tokens": 8192,
+  "ar_max_num_seqs": 64,
+  "wave_delay_s": 5.0,
+  "tokenizer": {
+    "path": "D:\\Code\\Sessions\\pdd\\exp\\debug\\tokenizer\\tokenizer.json",
+    "sha256": "c2439418b9be76a54d8b5ff1ed89b37e36ec1735730f7da99b5aabb83a73db64"
+  },
+  "points": [
+    {
+      "deployment": "pd",
+      "workload": "single",
+      "path": "pd-single.jsonl",
+      "sha256": "231b6f2e41c49adc508ccf290916111ff90cd792528d8b5ca5e1a4e22e3dd0e5",
+      "requests": 48,
+      "wave_sizes": [
+        48
+      ],
+      "full_input_tokens_mean": 1929.9791666666667,
+      "action": "reuse_run03",
+      "parent_pd_sha256": "231b6f2e41c49adc508ccf290916111ff90cd792528d8b5ca5e1a4e22e3dd0e5"
+    },
+    {
+      "deployment": "npd",
+      "workload": "single",
+      "path": "npd-single.jsonl",
+      "sha256": "f5ff6d23eda63a56831b8c201c8d23a72941e193ea95c0b26b17dcd713d691bc",
+      "requests": 32,
+      "wave_sizes": [
+        32
+      ],
+      "full_input_tokens_mean": 1929.96875,
+      "action": "run_once",
+      "parent_pd_sha256": "231b6f2e41c49adc508ccf290916111ff90cd792528d8b5ca5e1a4e22e3dd0e5"
+    },
+    {
+      "deployment": "pd",
+      "workload": "waves",
+      "path": "pd-waves.jsonl",
+      "sha256": "7f1e579130d9aab89bfd6645ba9831ab1f07141d85476578483a77fc09ce89ec",
+      "requests": 48,
+      "wave_sizes": [
+        24,
+        24
+      ],
+      "full_input_tokens_mean": 1928.3333333333333,
+      "action": "reuse_run03",
+      "parent_pd_sha256": "7f1e579130d9aab89bfd6645ba9831ab1f07141d85476578483a77fc09ce89ec"
+    },
+    {
+      "deployment": "npd",
+      "workload": "waves",
+      "path": "npd-waves.jsonl",
+      "sha256": "c5f9fd2f3d17a7d082e69a041823a54d3167af9ce64bbba0014b138de640ad12",
+      "requests": 32,
+      "wave_sizes": [
+        16,
+        16
+      ],
+      "full_input_tokens_mean": 1928.4375,
+      "action": "run_once",
+      "parent_pd_sha256": "7f1e579130d9aab89bfd6645ba9831ab1f07141d85476578483a77fc09ce89ec"
+    }
+  ],
+  "token_counts": "Offline t2i/think/en_unified segmented template; verify against runtime audit",
+  "unique_prompts": 96,
+  "input_tokens_range": [
+    1904,
+    1993
+  ],
+  "comparison_profile": "total_cards_1p5x",
+  "source_manifest_sha256": "87c18aae31667df2151d2d25d82d32693176c81f0db0588387d311cbb3f8171f",
+  "selection": "Retain original NPD subset; add by language/input-token mean within each wave; no output-based selection",
+  "ar_cards": {
+    "pd": 8,
+    "npd": 4
+  },
+  "total_cards": {
+    "pd": 12,
+    "npd": 8
+  }
+}

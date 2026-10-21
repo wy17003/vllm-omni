@@ -1,5 +1,8 @@
 # HunyuanImage3 run03：AR 高并发与两波请求实验
 
+> 补充的 PD/NPD 1.5 倍并发实验见 [EXPERIMENT_RUN03_1P5.md](EXPERIMENT_RUN03_1P5.md)：
+> 复用本轮 PD48，新增 NPD32，按整套服务 12/8 卡匹配并发。
+
 本轮考察 PD 的 AR 流水与 prefill/decode 干扰隔离收益。所有请求仍执行完整 t2i，
 不增加 AR-only 服务模式，不实现不同 AR KV 长度的 DiT 合批。
 每个实验点只执行一次；统一 `max_num_batched_tokens=8192`，不做容量搜索或自动降并发。
