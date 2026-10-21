@@ -12,6 +12,7 @@ import concurrent.futures
 import hashlib
 import json
 import shutil
+import socket
 import struct
 import subprocess
 import threading
@@ -147,6 +148,8 @@ def send_one(url, item, timeout, barrier, curl, request_path, response_path):
     record = {key: value for key, value in item.items() if key != "body"}
     record.update(
         success=False,
+        submitted_mono_ns=time.monotonic_ns(),
+        client_host=socket.gethostname(),
         dimensions=[],
         seed=item["body"]["seed"],
         response_file=str(response_path),
@@ -154,6 +157,7 @@ def send_one(url, item, timeout, barrier, curl, request_path, response_path):
     )
     try:
         completed = subprocess.run(command, capture_output=True, timeout=timeout + 5)
+        record["response_end_mono_ns"] = time.monotonic_ns()
         record["response_latency_s"] = time.perf_counter() - start
         record["curl_exit_code"] = completed.returncode
         record["http_status"] = int(completed.stdout.strip() or b"0")

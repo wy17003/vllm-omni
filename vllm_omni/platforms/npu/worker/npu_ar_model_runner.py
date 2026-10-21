@@ -49,6 +49,7 @@ from vllm_omni.distributed.omni_connectors.utils.kv_utils import get_local_tp_ra
 from vllm_omni.engine.serialization import request_needs_downstream_stage
 from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.platforms.npu.worker.npu_model_runner import OmniNPUModelRunner
+from vllm_omni.utils import hunyuan_ar_trace
 from vllm_omni.utils.debug_fingerprint import (
     fixed_token_positions,
     gather_paged_tensor_tokens,
@@ -940,6 +941,12 @@ class NPUARModelRunner(OmniNPUModelRunner):
                 ),
             ) as kv_connector_output,
         ):
+            if hunyuan_ar_trace.ENABLED and get_local_tp_rank() == 0:
+                hunyuan_ar_trace.emit(
+                    "forward_submit",
+                    self.model_config.stage_id,
+                    {"rank": 0, "scheduled_tokens": dict(scheduler_output.num_scheduled_tokens)},
+                )
             hidden_states = self._model_forward(
                 num_tokens_padded, input_ids, positions, intermediate_tensors, inputs_embeds, **model_kwargs
             )

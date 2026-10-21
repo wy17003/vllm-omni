@@ -49,6 +49,7 @@ from vllm_omni.engine.stage_pool import StagePool
 from vllm_omni.metrics.prometheus import OmniRequestCounter
 from vllm_omni.metrics.stat_logger import OmniPrometheusStatLogger
 from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.utils import hunyuan_ar_trace
 
 logger = init_logger(__name__)
 
@@ -489,6 +490,8 @@ class Orchestrator:
             self._running_counter.increment()
         req_state.streaming.enabled = bool(getattr(prompt, "resumable", False))
         req_state.stage_submit_ts[stage_id] = _time.time()
+        if hunyuan_ar_trace.ENABLED:
+            hunyuan_ar_trace.emit("request_start", stage_id, {"request_id": request_id})
         enqueue_ts = msg.enqueue_ts
         if enqueue_ts > 0:
             req_state.pipeline_timings["queue_wait_ms"] = (_time.perf_counter() - enqueue_ts) * 1000.0
@@ -792,6 +795,8 @@ class Orchestrator:
 
             stage_metrics = None
             if output.finished:
+                if hunyuan_ar_trace.ENABLED and pool.stage_type != "diffusion":
+                    hunyuan_ar_trace.emit("stage_done", stage_id, {"request_id": output.request_id})
                 stage_metrics = pool.build_stage_metrics(
                     [output],
                     submit_ts=req_state.stage_submit_ts.get(stage_id, _time.time()),

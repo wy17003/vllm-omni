@@ -1,7 +1,7 @@
 # HunyuanImage3 PD 简化性能实验
 
-> 本文保留为 run01 原方案。当前补充实验使用 [EXPERIMENT_RUN02.md](EXPERIMENT_RUN02.md)：
-> 复用 run01 PD short/mixed，补跑 PD long，执行修订后的 NPD 六个点。
+> 本文保留为 run01 原方案；run02 见 [EXPERIMENT_RUN02.md](EXPERIMENT_RUN02.md)。
+> 当前 AR 高并发 / 两波请求实验使用 [EXPERIMENT_RUN03.md](EXPERIMENT_RUN03.md)，每点仅执行一次。
 
 本轮直接执行完整t2i，用现有阶段日志统计TTFT/TPOT，用客户端逐请求响应时间统计E2E。
 不增加AR-only模式，不搜索容量，不要求先跑探针，也不要求加载tokenizer校准输入。

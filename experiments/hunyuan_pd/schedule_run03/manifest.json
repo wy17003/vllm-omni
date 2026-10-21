@@ -1,0 +1,65 @@
+{
+  "version": 3,
+  "rounds": 1,
+  "max_num_batched_tokens": 8192,
+  "ar_max_num_seqs": 64,
+  "wave_delay_s": 5.0,
+  "tokenizer": {
+    "path": "D:\\Code\\Sessions\\pdd\\exp\\debug\\tokenizer\\tokenizer.json",
+    "sha256": "c2439418b9be76a54d8b5ff1ed89b37e36ec1735730f7da99b5aabb83a73db64"
+  },
+  "points": [
+    {
+      "deployment": "pd",
+      "workload": "single",
+      "path": "pd-single.jsonl",
+      "sha256": "231b6f2e41c49adc508ccf290916111ff90cd792528d8b5ca5e1a4e22e3dd0e5",
+      "requests": 48,
+      "wave_sizes": [
+        48
+      ],
+      "full_input_tokens_mean": 1929.9791666666667
+    },
+    {
+      "deployment": "npd",
+      "workload": "single",
+      "path": "npd-single.jsonl",
+      "sha256": "94622397f70c8a15e3fe56e4d0357dd78da3c830bd5dd3fd48cd138b90e5c2fe",
+      "requests": 24,
+      "wave_sizes": [
+        24
+      ],
+      "full_input_tokens_mean": 1930.2083333333333
+    },
+    {
+      "deployment": "pd",
+      "workload": "waves",
+      "path": "pd-waves.jsonl",
+      "sha256": "7f1e579130d9aab89bfd6645ba9831ab1f07141d85476578483a77fc09ce89ec",
+      "requests": 48,
+      "wave_sizes": [
+        24,
+        24
+      ],
+      "full_input_tokens_mean": 1928.3333333333333
+    },
+    {
+      "deployment": "npd",
+      "workload": "waves",
+      "path": "npd-waves.jsonl",
+      "sha256": "9e0334c4a3090157e1bbc035f4d1375736a6381261a6177bff3c34a3710a0e76",
+      "requests": 24,
+      "wave_sizes": [
+        12,
+        12
+      ],
+      "full_input_tokens_mean": 1927.6666666666667
+    }
+  ],
+  "token_counts": "Offline t2i/think/en_unified segmented template; verify against runtime audit",
+  "unique_prompts": 96,
+  "input_tokens_range": [
+    1904,
+    1993
+  ]
+}

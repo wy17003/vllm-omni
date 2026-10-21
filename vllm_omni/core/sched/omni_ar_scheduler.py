@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import asdict, dataclass
-from time import time
+from time import monotonic_ns, time
 from typing import Any
 
 from vllm.compilation.cuda_graph import CUDAGraphStat
@@ -41,6 +41,7 @@ from vllm_omni.engine.serialization import (
     request_needs_downstream_stage,
 )
 from vllm_omni.outputs import OmniConnectorOutput
+from vllm_omni.utils import hunyuan_ar_trace
 
 logger = init_logger(__name__)
 
@@ -133,7 +134,21 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
                 or request.resumable
             ):
                 raise ValueError("PD first-token continuation requires PP/CP=1, no speculation, no resumable input")
-        return super().add_request(request)
+        result = super().add_request(request)
+        if hunyuan_ar_trace.ENABLED:
+            hunyuan_ar_trace.emit(
+                "admit",
+                self.vllm_config.model_config.stage_id,
+                {
+                    "request_id": request.request_id,
+                    "external_request_id": getattr(request, "external_req_id", None) or request.request_id,
+                    "input_tokens": request.num_prompt_tokens,
+                    "max_num_seqs": self.scheduler_config.max_num_seqs,
+                    "max_num_batched_tokens": self.scheduler_config.max_num_batched_tokens,
+                    "prefix_caching": self.vllm_config.cache_config.enable_prefix_caching,
+                },
+            )
+        return result
 
     def _update_request_with_output(self, request: Request, new_token_ids: list[int], *args, **kwargs):
         token_ids, stopped = super()._update_request_with_output(request, new_token_ids, *args, **kwargs)
@@ -221,6 +236,15 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         result = super()._update_waiting_for_remote_kv(request)
         if continuation is not None and request.num_computed_tokens != continuation.prompt_len:
             raise RuntimeError("PD continuation expected complete prompt KV, without tail recomputation")
+        if continuation is not None and hunyuan_ar_trace.ENABLED:
+            hunyuan_ar_trace.emit(
+                "kv_ready",
+                self.vllm_config.model_config.stage_id,
+                {
+                    "request_id": request.request_id,
+                    "computed_tokens": request.num_computed_tokens,
+                },
+            )
         return result
 
     def _get_confirmed_num_computed_tokens(self, request: Request) -> int:
@@ -419,6 +443,8 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
         scheduler_output: SchedulerOutput,
         model_runner_output: ModelRunnerOutput,
     ) -> dict[int, EngineCoreOutputs]:
+        trace_time = monotonic_ns() if hunyuan_ar_trace.ENABLED else 0
+        trace_outputs = []
         sampled_token_ids = model_runner_output.sampled_token_ids
         logprobs = model_runner_output.logprobs
         prompt_logprobs_dict = model_runner_output.prompt_logprobs_dict
@@ -617,6 +643,16 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
             if new_token_ids or mm_output is not None or pooler_output is not None or kv_transfer_params or stopped:
                 # Only the emitted delta needs y1; model history already has it.
                 new_token_ids = prepend_initial_output(request, new_token_ids, stopped)
+                if hunyuan_ar_trace.ENABLED and (new_token_ids or stopped or request.prefill_stats is not None):
+                    trace_outputs.append(
+                        {
+                            "request_id": req_id,
+                            "delta_tokens": len(new_token_ids),
+                            "output_tokens": request.num_output_tokens,
+                            "cached_tokens": getattr(request.prefill_stats, "num_local_cached_tokens", None),
+                            "finished": stopped,
+                        }
+                    )
                 # Add EngineCoreOutput for this Request.
                 outputs[request.client_index].append(
                     OmniEngineCoreOutput(
@@ -645,6 +681,15 @@ class OmniARScheduler(OmniSchedulerMixin, VLLMScheduler):
                 assert not prompt_logprobs_tensors
 
         # Remove the stopped requests from the running and waiting queues.
+        if trace_outputs:
+            # Keep trace lines small when several stage processes share stderr.
+            for offset in range(0, len(trace_outputs), 8):
+                hunyuan_ar_trace.emit(
+                    "outputs",
+                    self.vllm_config.model_config.stage_id,
+                    {"requests": trace_outputs[offset : offset + 8]},
+                    trace_time,
+                )
         if stopped_running_reqs:
             self.running = remove_all(self.running, stopped_running_reqs)
         if stopped_preempted_reqs:
