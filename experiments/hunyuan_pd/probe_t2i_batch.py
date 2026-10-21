@@ -20,7 +20,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
-from audit_tokens import audit_tokens, load_tokenizer, tokenizer_metadata
+from audit_tokens import TOKEN_AUDIT_POLICY, audit_tokens, load_tokenizer, tokenizer_metadata
 from summarize_metrics import parse_stage_metrics, summary
 
 
@@ -275,6 +275,7 @@ def main():
         unique_prompts_per_round=[len({row["prompt_sha256"] for row in batch}) for batch in batches],
         executed=False,
         token_audit_tokenizer=tokenizer_metadata(args.tokenizer_json) if args.tokenizer_json else None,
+        token_audit_policy=TOKEN_AUDIT_POLICY if args.tokenizer_json else None,
     )
     (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"output directory: {args.output_dir}", flush=True)
@@ -286,6 +287,7 @@ def main():
     plan.update(executed=True, execution_status="running")
     (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     final = None
+    audit_rounds = []
     for round_number in range(1, args.rounds + 1):
         batch = batches[round_number - 1]
         request_dir = request_dirs[round_number - 1]
@@ -331,6 +333,7 @@ def main():
                 ar_metrics["log_byte_interval"] = [log_start.st_size, log_end.st_size]
         if tokenizer is not None:
             token_audit = audit_tokens(log_text, batch, tokenizer)
+            audit_rounds.append(dict(round=round_number, warning_ids=[row["id"] for row in token_audit["warnings"]]))
         final = dict(
             round=round_number,
             success_count=success_count,
@@ -349,6 +352,21 @@ def main():
         )
         print(f"round {round_number}: {success_count}/{len(batch)} passed, client wall={wall_s:.3f}s", flush=True)
         print(json.dumps({"e2e_s": final["e2e_s"], "ar_metrics": ar_metrics}, ensure_ascii=False), flush=True)
+        if token_audit is not None:
+            print(
+                f"token audit ({token_audit['policy']}): valid={token_audit['valid']}, "
+                f"warnings={len(token_audit['warnings'])}, "
+                f"blocking_mismatches={len(token_audit['blocking_mismatches'])}, "
+                f"errors={len(token_audit['errors'])}",
+                flush=True,
+            )
+            for warning in token_audit["warnings"]:
+                print(
+                    f"WARNING: {warning['id']} ({warning['server_request_id']}): "
+                    f"equal-length token IDs differ ({warning['output_tokens']} tokens); "
+                    "continuing under the experiment policy",
+                    flush=True,
+                )
         if not final["valid"]:
             plan.update(execution_status="failed", failed_round=round_number)
             (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -364,6 +382,7 @@ def main():
         e2e_s=final["e2e_s"],
         ar_metrics=final["ar_metrics"],
         token_audit=final["token_audit"],
+        token_audit_round_warnings=audit_rounds,
         note=(
             "E2E is per-request curl latency including response write, excluding PNG validation. "
             "AR metrics are stage-local."

@@ -89,7 +89,7 @@ def build_revision(baseline_dir, output_dir, tokenizer_path):
             audit = audit_tokens(log_path.read_text(encoding="utf-8"), requests, tokenizer)
             if audit["errors"]:
                 raise ValueError(f"Cannot establish baseline input lengths: {audit['errors']}")
-            if point["group"] in ("short", "mixed") and number == 3 and not audit["valid"]:
+            if point["group"] in ("short", "mixed") and number == 3 and not audit["roundtrip_consistent"]:
                 raise ValueError(f"Cannot reuse {point['group']} third round with token anomalies")
             audits.append(dict(group=point["group"], round=number, mismatches=audit["mismatches"]))
             for row in audit["requests"]:

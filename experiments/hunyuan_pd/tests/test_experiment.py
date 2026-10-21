@@ -12,12 +12,14 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from audit_tokens import audit_tokens  # noqa: E402
 from prepare_schedule import build_schedule  # noqa: E402
+from reparse_results import reparse  # noqa: E402
 from summarize_metrics import parse_stage_metrics  # noqa: E402
 
 
@@ -40,7 +42,7 @@ class ExperimentTests(unittest.TestCase):
         npd = table.replace("| 0 | 1 | 1_2 | 2 |", "| 0 | 0_2 | 1 | 2 |")
         self.assertIsNone(parse_stage_metrics(npd, "npd", 1)["ttft_ms"]["mean"])
 
-    def test_token_audit_detects_length_and_identity_mismatches_and_missing_logs(self):
+    def test_token_audit_warns_on_equal_length_but_blocks_length_text_and_coverage_errors(self):
         class Tokenizer:
             def decode(self, ids, **kwargs):
                 return "system user prompt" if ids == [100] else "same text"
@@ -55,11 +57,67 @@ class ExperimentTests(unittest.TestCase):
             return prefix + f'[HY3_EQ] ar request_id=req output_token_ids={ids} ar_generated_text="same text"\n'
 
         self.assertTrue(audit_tokens(logged([1, 2]), requests, Tokenizer())["valid"])
-        for ids in ([3, 4], [1, 2, 3], [1]):
+        warning = audit_tokens(logged([3, 4]), requests, Tokenizer())
+        self.assertTrue(warning["valid"])
+        self.assertFalse(warning["roundtrip_consistent"])
+        self.assertEqual(warning["policy"], "warn_equal_length_v1")
+        self.assertEqual(len(warning["warnings"]), 1)
+        self.assertEqual(warning["blocking_mismatches"], [])
+        for ids in ([1, 2, 3], [1]):
             audit = audit_tokens(logged(ids), requests, Tokenizer())
             self.assertFalse(audit["valid"])
             self.assertEqual(len(audit["mismatches"]), 1)
+            self.assertEqual(len(audit["blocking_mismatches"]), 1)
+            self.assertEqual(audit["warnings"], [])
+        changed_text = logged([3, 4]).replace('ar_generated_text="same text"', 'ar_generated_text="changed text"')
+        self.assertFalse(audit_tokens(changed_text, requests, Tokenizer())["valid"])
+        malformed = logged([3, 4]).replace('ar_generated_text="same text"', "ar_generated_text=null")
+        self.assertFalse(audit_tokens(malformed, requests, Tokenizer())["valid"])
         self.assertFalse(audit_tokens("", requests, Tokenizer())["valid"])
+        self.assertFalse(audit_tokens(logged([3, 4]), requests * 2, Tokenizer())["valid"])
+
+        # Reanalyze a round rejected by the old strict policy. It can pass the
+        # new policy without inventing rounds 2/3 or rewriting its source.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            folder = source / "pd-long-c24_pc-on_step-off_s0-32_s1-32_s2-1"
+            (folder / "round1_inputs").mkdir(parents=True)
+            tokenizer_path = root / "tokenizer.json"
+            tokenizer_path.write_text("{}", encoding="utf-8")
+            (folder / "plan.json").write_text(json.dumps(dict(group="long", concurrency=1)), encoding="utf-8")
+            (folder / "round1_inputs/requests.json").write_text(json.dumps(requests), encoding="utf-8")
+            log = logged([3, 4]) + (
+                "[StageRequestStats [request_id=req]]\n| Field | 0 | 1 |\n"
+                "| vllm_ttft_ms | 100 | 40 |\n| vllm_tpot_ms | 0 | 15 |\n"
+            )
+            (folder / "round1_server.log").write_text(log, encoding="utf-8")
+            original = dict(
+                round=1,
+                valid=False,
+                request_count=1,
+                success_count=1,
+                ar_metrics={},
+                records=[dict(success=True, curl_exit_code=0, http_status=200, dimensions=[[1024, 1024]])],
+            )
+            result_path = folder / "round1.json"
+            result_path.write_text(json.dumps(original), encoding="utf-8")
+            raw = result_path.read_bytes()
+            with patch("reparse_results.load_tokenizer", return_value=Tokenizer()):
+                summary = reparse(source, root / "analysis", "pd", tokenizer_path)
+            updated = json.loads((root / "analysis" / folder.name / "round1.json").read_text(encoding="utf-8"))
+            self.assertFalse(updated["source_valid"])
+            self.assertTrue(updated["valid"])
+            self.assertTrue(updated["analysis_eligible"])
+            self.assertFalse(summary["points"][0]["third_round_eligible"])
+            self.assertEqual(result_path.read_bytes(), raw)
+            original["success_count"] = 0
+            original["records"][0].update(success=False, http_status=500)
+            result_path.write_text(json.dumps(original), encoding="utf-8")
+            with patch("reparse_results.load_tokenizer", return_value=Tokenizer()):
+                reparse(source, root / "failed_analysis", "pd", tokenizer_path)
+            failed = json.loads((root / "failed_analysis" / folder.name / "round1.json").read_text(encoding="utf-8"))
+            self.assertFalse(failed["valid"])
 
     def test_revision_preserves_reference_pd_and_replaces_only_risky_slots(self):
         root = ROOT / "schedule_v2"

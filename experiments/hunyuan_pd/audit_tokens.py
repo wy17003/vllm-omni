@@ -9,6 +9,8 @@ import json
 import re
 from pathlib import Path
 
+TOKEN_AUDIT_POLICY = "warn_equal_length_v1"
+
 
 def load_tokenizer(path):
     try:
@@ -40,6 +42,8 @@ def read_ar_events(log_text):
                 event[key] = ids
                 if key == "output_token_ids":
                     generated_text = json.JSONDecoder().raw_decode(line.split("ar_generated_text=", 1)[1])[0]
+                    if not isinstance(generated_text, str):
+                        raise ValueError("expected generated text string")
                     event["text"] = generated_text
             except (ValueError, IndexError, TypeError) as exc:
                 errors.append(f"{request_id}: malformed {key}: {exc}")
@@ -86,14 +90,25 @@ def audit_tokens(log_text, requests, tokenizer):
     if sorted(mapped) != sorted(expected_ids) or len(set(mapped)) != len(mapped):
         errors.append("AR output coverage does not match the actual batch exactly")
     mismatches = [r for r in rows if not r["roundtrip_equal"]]
+    warnings = [r for r in mismatches if r["decoded_text_matches_log"] and r["output_tokens"] == r["reencoded_tokens"]]
+    blocking = [
+        r for r in mismatches if not r["decoded_text_matches_log"] or r["output_tokens"] != r["reencoded_tokens"]
+    ]
     return dict(
-        valid=not errors and not mismatches,
+        policy=TOKEN_AUDIT_POLICY,
+        valid=not errors and not blocking,
+        roundtrip_consistent=not errors and not mismatches,
         expected_count=len(requests),
         observed_count=len(rows),
         errors=errors,
         mismatches=mismatches,
+        warnings=warnings,
+        blocking_mismatches=blocking,
         requests=rows,
-        scope="Logged AR token/text round-trip only; does not prove KV numerical or image equivalence",
+        scope=(
+            "Equal-length ID differences with matching decoded text are warnings under the experiment policy. "
+            "Passing does not prove token, KV numerical, or image equivalence."
+        ),
     )
 
 

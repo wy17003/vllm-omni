@@ -5,6 +5,11 @@
 不修改推理代码、模型、采样参数或服务配置；本轮修改仅涉及客户端实验工具、离线分析及输入清单。
 原始结果和 schedule 保留，所有新结果写入新目录。
 
+2026-10-21 验收口径更新：采用 `warn_equal_length_v1`。解码文本一致且仅发生等长 token ID 差异时，
+记录警告并继续；长度变化、文本不一致、日志缺失/冲突仍停止。PD/NPD及离线重算使用同一规则。
+这仅调整性能实验的验收范围，不是修复KV对齐缺陷，也不是图像等价性证明。
+旧 run02 round1 因严格审计停止的结果保留；更新后按第6节在 `hy3_run02_warn` 从三轮重新开始。
+
 ## 1. 数据来源与实验矩阵
 
 | 输入组 | PD C24 | NPD C12 | NPD C16 |
@@ -75,13 +80,15 @@ NPD 相对对应 PD 的整批平均完整输入 token 数偏差：short≤0.04%�
 新 JSONL 固定 LF，目录内 .gitattributes 固定检出换行，避免原先 Windows/Linux 字节哈希差异。
 不要手工修改 JSONL 后更新哈希来绕过校验。
 
-通常直接使用已提交的 schedule_v2；确需复现生成过程时，输出到另一个新目录：
+优先复用服务器已经生成的 `/home/w00934428/hy3_run02/schedule_linux`，无需因规则调整重新选样。
+仓库全局忽略 JSON/JSONL，提交1042fddd9仅包含schedule_v2/.gitattributes，不能假设git同步带来了完整清单。
+若服务器尚无清单，使用以下命令生成一次（输出目录必须不存在）：
 
 ```bash
 python experiments/hunyuan_pd/prepare_revision.py \
   --baseline-dir /home/w00934428/hy3_run01/pd \
   --tokenizer-json /new_data/HunyuanImage-3.0-Instruct/tokenizer.json \
-  --output-dir /home/w00934428/hy3_schedule_v2_rebuilt
+  --output-dir /home/w00934428/hy3_run02/schedule_linux
 ```
 
 ## 4. 固定资源、服务与请求参数
@@ -118,13 +125,14 @@ NPD 按固定顺序连续执行，不在点之间清空缓存。新 long 缺少�
 python experiments/hunyuan_pd/reparse_results.py \
   --deployment pd \
   --source-dir /home/w00934428/hy3_run01/pd \
-  --output-dir /home/w00934428/hy3_run01_pd_analysis \
+  --output-dir /home/w00934428/hy3_run01_pd_analysis_warn \
   --tokenizer-json /new_data/HunyuanImage-3.0-Instruct/tokenizer.json
 ```
 
 输出目录必须不存在。预期 third_round_eligible：short=true、mixed=true、long=false。
 每轮结果包含重算的 ar_metrics、token_audit、analysis_eligible 和源文件哈希。
-源 valid 仍表示原来的执行判定；本次是否可用以 analysis_eligible/重算 selected_result.valid 为准。
+source_valid保留原执行判定；valid根据原HTTP/图像记录及当前审计规则重算，
+analysis_eligible还要求TTFT/TPOT完整。离线重算不会修改源文件，也不会补齐未执行的轮次。
 summary.json 从全部实际点目录重建，不依赖旧的不完整 summary。
 
 解析规则：同请求同阶段的重复列（如1与1_2、0与0_2），仅在全部已打印字段一致时计一次。
@@ -142,15 +150,19 @@ summary.json 从全部实际点目录重建，不依赖旧的不完整 summary�
 
 在推理服务器仓库根目录运行。保持独占服务流量；日志应为客户端本地可读的追加文件，不能轮转。
 停止此前失败/筛选用服务，确认进程退出后再开始。脚本不负责启动服务。
-run02 输出与 run01 分开，禁止覆盖原目录或将 dry-run 输出目录用于正式运行。
+新规则输出写入hy3_run02_warn，与原run01、已停止的run02分开；禁止覆盖原目录。
+驱动不支持从旧round1目录恢复round2；使用新目录完整执行三轮，原round1保留为诊断记录。
+更新只涉及客户端工具；重新启动服务是为重新开始本轮缓存历史，不涉及模型/服务实现修改。
 
 **终端A：启动 PD，等待服务 ready**
 
 ```bash
-mkdir -p /home/w00934428/hy3_run02
+cd /home/w00934428/projects/vllm-omni || exit 1
+mkdir -p /home/w00934428/hy3_run02_warn
 vllm serve /new_data/HunyuanImage-3.0-Instruct/ --omni \
-  --port 9000 --stage-configs-path experiments/hunyuan_pd/configs/pd.yaml \
-  --log-stats > /home/w00934428/hy3_run02/pd-server.log 2>&1
+  --port 9000 \
+  --stage-configs-path /home/w00934428/projects/vllm-omni/experiments/hunyuan_pd/configs/pd.yaml \
+  --log-stats > /home/w00934428/hy3_run02_warn/pd-server.log 2>&1
 ```
 
 **终端B：只执行 PD long 三轮**
@@ -158,10 +170,10 @@ vllm serve /new_data/HunyuanImage-3.0-Instruct/ --omni \
 ```bash
 python experiments/hunyuan_pd/run_experiment.py \
   --deployment pd --groups long \
-  --schedule-dir experiments/hunyuan_pd/schedule_v2 \
+  --schedule-dir /home/w00934428/hy3_run02/schedule_linux \
   --tokenizer-json /new_data/HunyuanImage-3.0-Instruct/tokenizer.json \
-  --output-root /home/w00934428/hy3_run02 \
-  --server-log /home/w00934428/hy3_run02/pd-server.log \
+  --output-root /home/w00934428/hy3_run02_warn \
+  --server-log /home/w00934428/hy3_run02_warn/pd-server.log \
   --timeout 1800
 ```
 
@@ -171,8 +183,9 @@ python experiments/hunyuan_pd/run_experiment.py \
 
 ```bash
 vllm serve /new_data/HunyuanImage-3.0-Instruct/ --omni \
-  --port 9000 --stage-configs-path experiments/hunyuan_pd/configs/npd.yaml \
-  --log-stats > /home/w00934428/hy3_run02/npd-server.log 2>&1
+  --port 9000 \
+  --stage-configs-path /home/w00934428/projects/vllm-omni/experiments/hunyuan_pd/configs/npd.yaml \
+  --log-stats > /home/w00934428/hy3_run02_warn/npd-server.log 2>&1
 ```
 
 **终端B：执行 NPD 六个点，每点三轮**
@@ -180,10 +193,10 @@ vllm serve /new_data/HunyuanImage-3.0-Instruct/ --omni \
 ```bash
 python experiments/hunyuan_pd/run_experiment.py \
   --deployment npd \
-  --schedule-dir experiments/hunyuan_pd/schedule_v2 \
+  --schedule-dir /home/w00934428/hy3_run02/schedule_linux \
   --tokenizer-json /new_data/HunyuanImage-3.0-Instruct/tokenizer.json \
-  --output-root /home/w00934428/hy3_run02 \
-  --server-log /home/w00934428/hy3_run02/npd-server.log \
+  --output-root /home/w00934428/hy3_run02_warn \
+  --server-log /home/w00934428/hy3_run02_warn/npd-server.log \
   --timeout 1800
 ```
 
@@ -202,7 +215,15 @@ run02 清单强制要求 --tokenizer-json，且文件SHA必须与冻结清单一
 
 1. 该批实际输入能与 AR 输入日志唯一对应，完整覆盖24/12/16条请求。
 2. 原始 AR 输出 token 解码文本与日志一致。
-3. 相同生成文本重新编码后，token 数量和每个ID都一致。
+3. 相同生成文本重新编码后，token数量必须一致；同长度但ID不同只告警，不停止。
+
+结果中的token_audit.policy为warn_equal_length_v1：
+
+- warnings：等长ID差异，要求解码文本与日志一致；打印WARNING并允许后续轮次继续。
+- blocking_mismatches：token数量增减或解码文本不一致，仍停止。
+- errors：日志缺失、覆盖不完整、无法唯一映射或日志冲突，仍停止。
+- mismatches保留全部差异；roundtrip_consistent=false明确表示token并非完全一致，即使valid=true。
+- 每轮保留完整差异；selected_result及部署summary附带三轮token_audit_round_warnings，不能只报告无警告样本。
 
 HTTP/尺寸校验或 token 审计任一失败，该轮 valid=false，保存错误和token差异后停止后续轮次，
 不产生该点 selected_result。不自动重试、不自动换 prompt，不选择最快或偶然成功的一轮。
@@ -213,7 +234,8 @@ TTFT/TPOT若为N/A，检查conflicts及日志覆盖；不进入对应指标的�
 审计在客户端计时结束后执行，不计入 E2E/client_wall；它会增加批次间隔，原 run01 没有这个检查，
 这一运行节奏差异应记录。检查只针对已知文本重编码缺陷，不是完整KV/画质验证。
 
-若仍触发缺陷，保留结果和新风险输入，停止并分析；不要反复筛选直到获得更好的性能。
+若出现阻断项，保留结果和新风险输入，停止并分析；等长警告按上述规则继续，不再据此替换prompt。
+不要反复筛选直到获得更好的性能。
 替换版本必须重新冻结并说明原因，不能覆盖已有输入和结果。
 
 ## 8. 汇总与交付
@@ -222,16 +244,16 @@ TTFT/TPOT若为N/A，检查conflicts及日志覆盖；不进入对应指标的�
 
 | 数据 | 来源 |
 |---|---|
-| PD short/mixed | hy3_run01_pd_analysis 对应第三轮 |
-| PD long | hy3_run02/pd 对应第三轮，要求通过token审计 |
-| NPD short/long/mixed，C12/C16 | hy3_run02/npd 各点第三轮，要求通过token审计 |
+| PD short/mixed | hy3_run01_pd_analysis_warn 对应第三轮 |
+| PD long | hy3_run02_warn/pd 对应第三轮，要求审计无阻断项，保留警告 |
+| NPD short/long/mixed，C12/C16 | hy3_run02_warn/npd 各点第三轮，同一审计规则 |
 
 报告每项样本数、均值、P50和最大值：TTFT取PD stage0/NPD stage0，TPOT取PD stage1/NPD stage0。
 PD TTFT不含完整P→D等待，不能与D的TTFT相加；E2E沿用客户端逐请求响应时间。
 原始三轮全部保留，不把轮换输入当成同一负载重复测量来计算稳定性。
 当前长输入只是相对分类，不称为2K/4K/8K桶；新PD long第三轮平均完整输入约1712 tokens。
 
-提供 run02/pd、run02/npd 的 summary、plan、selected_result、roundN.json、
+提供 hy3_run02_warn/pd、hy3_run02_warn/npd 的 summary、plan、selected_result、roundN.json、
 roundN_server.log、roundN_inputs/requests.json、manifest、配置和Git记录。
 同时保存完整 pd-server.log/npd-server.log 的启动部分；暂不要求传输大体积图片响应。
 

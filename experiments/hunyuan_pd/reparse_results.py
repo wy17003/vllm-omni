@@ -41,6 +41,19 @@ def reparse(source, output, deployment, tokenizer_path):
             audit = audit_tokens(log, requests, tokenizer)
             result["ar_metrics"] = metrics
             result["token_audit"] = audit
+            # An old valid=false may have been caused only by the strict token
+            # policy. Recheck transport/image records instead of carrying that
+            # decision forward; retain it explicitly for provenance.
+            result["source_valid"] = result["valid"]
+            records = result["records"]
+            result["http_and_image_valid"] = len(records) == result["request_count"] == result["success_count"] and all(
+                row["success"]
+                and row["curl_exit_code"] == 0
+                and 200 <= row["http_status"] < 300
+                and row["dimensions"] == [[1024, 1024]]
+                for row in records
+            )
+            result["valid"] = result["http_and_image_valid"] and audit["valid"]
             result["analysis_eligible"] = (
                 result["valid"]
                 and audit["valid"]
@@ -60,7 +73,7 @@ def reparse(source, output, deployment, tokenizer_path):
             analysis_dir=str(target),
             third_round_eligible=eligible,
             earlier_round_token_anomalies=[
-                r["round"] for r in rounds if r["round"] < 3 and not r["token_audit"]["valid"]
+                r["round"] for r in rounds if r["round"] < 3 and not r["token_audit"]["roundtrip_consistent"]
             ],
         )
         if third:
@@ -72,6 +85,10 @@ def reparse(source, output, deployment, tokenizer_path):
                 e2e_s=third["e2e_s"],
                 ar_metrics=third["ar_metrics"],
                 token_audit=third["token_audit"],
+                token_audit_round_warnings=[
+                    dict(round=r["round"], warning_ids=[row["id"] for row in r["token_audit"]["warnings"]])
+                    for r in rounds
+                ],
                 note=(
                     "Offline reanalysis; original HTTP success is not token consistency. "
                     "Earlier anomalies remain disclosed."
