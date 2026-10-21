@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from audit_tokens import load_tokenizer, tokenizer_metadata
+
 ROOT = Path(__file__).resolve().parent
 
 
@@ -23,6 +25,16 @@ def run(args):
     }
     if len(points) != len(expected) or {(p["group"], p["concurrency"]) for p in points} != expected:
         raise ValueError("Schedule does not contain exactly the expected experiment points")
+    points = [p for p in points if p.get("action", "run") == "run" and p["group"] in args.groups]
+    if not points:
+        raise ValueError("No runnable points selected; run02 PD short/mixed reuse run01")
+    if manifest.get("require_token_audit") and not args.tokenizer_json:
+        raise ValueError("This schedule requires --tokenizer-json for post-batch token auditing")
+    if args.tokenizer_json:
+        metadata = tokenizer_metadata(args.tokenizer_json)
+        if manifest.get("tokenizer_sha256", metadata["sha256"]) != metadata["sha256"]:
+            raise ValueError("Tokenizer differs from the one used to freeze this schedule")
+        load_tokenizer(args.tokenizer_json)  # Fail before any HTTP request if dependency/file is invalid.
     # Verify all inputs before submitting any HTTP requests.
     for point in points:
         if [b["round"] for b in point["batches"]] != [1, 2, 3]:
@@ -77,6 +89,8 @@ def run(args):
         ]
         if args.server_log:
             command.extend(["--server-log", str(args.server_log.resolve())])
+        if args.tokenizer_json:
+            command.extend(["--tokenizer-json", str(args.tokenizer_json.resolve())])
         if args.prepare_only:
             command.append("--prepare-only")
         print(f"Running {args.deployment} {point['group']} C={point['concurrency']}", flush=True)
@@ -109,6 +123,8 @@ if __name__ == "__main__":
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--server-log", type=Path)
     parser.add_argument("--schedule-dir", type=Path, default=ROOT / "schedule")
+    parser.add_argument("--groups", nargs="+", choices=("short", "long", "mixed"), default=["short", "long", "mixed"])
+    parser.add_argument("--tokenizer-json", type=Path, help="Required by run02; checks logged AR token round trips")
     parser.add_argument("--model", default="/new_data/HunyuanImage-3.0-Instruct/")
     parser.add_argument("--base-url", default="http://localhost:9000")
     parser.add_argument("--timeout", type=float, default=180)

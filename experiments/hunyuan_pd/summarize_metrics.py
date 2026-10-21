@@ -19,43 +19,79 @@ def parse_stage_metrics(log_text, deployment, expected_count):
     clean = re.sub(r"\x1b\[[0-9;]*m", "", log_text)
     by_request = {}
     request_id, columns = None, []
-    ambiguous = False
+    tables = []
+    table = None
     for line in clean.splitlines():
         match = re.search(r"\[StageRequestStats \[request_id=([^\]]+)\]\]", line)
         if match:
             request_id, columns = match[1], []
             by_request.setdefault(request_id, {})
+            table = {}
+            tables.append((request_id, table))
             continue
+        # Do not consume a later E2E/transfer table as part of this stage table.
+        if re.search(r"\[(?:RequestE2EStats|TransferStats|OmniTiming)\b", line):
+            request_id, columns = None, []
         if request_id is None or "|" not in line:
             continue
         cells = [cell.strip() for cell in line[line.index("|") :].split("|")[1:-1]]
         if not cells:
             continue
         if cells[0] == "Field":
+            if columns:
+                # Another table began without a StageRequestStats title.
+                request_id, columns = None, []
+                continue
             columns = cells[1:]
             continue
-        if cells[0] not in ("vllm_ttft_ms", "vllm_tpot_ms"):
+        if not columns or not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", cells[0]):
             continue
         for column, cell in zip(columns, cells[1:]):
-            # Multiple events for a stage are ambiguous; do not silently
-            # count a repeated table/stage as another completed request.
-            if "_" in column:
+            table.setdefault(column, {})[cells[0]] = cell
+
+    ambiguous = False
+    duplicate_columns = 0
+    conflicts = []
+    stage_rows = {}
+    for request_id, table in tables:
+        for column, fields in table.items():
+            match = re.fullmatch(r"(\d+)(?:_([2-9]\d*|1\d+))?", column)
+            if not match:
                 ambiguous = True
+                conflicts.append(f"{request_id}: invalid stage column {column}")
                 continue
-            try:
-                value = float(cell.replace(",", ""))
-            except ValueError:
+            stage = match[1]
+            if match[2]:
+                # The suffix is added by metrics.utils._format_table. Collapse
+                # only if ALL printed fields match, not just TTFT/TPOT.
+                if stage not in table or table[stage] != fields:
+                    ambiguous = True
+                    conflicts.append(f"{request_id}: {column} differs from {stage}")
+                else:
+                    duplicate_columns += 1
                 continue
-            key = (column, cells[0])
-            previous = by_request[request_id].get(key)
-            if previous is not None and previous != value:
+            key = (request_id, stage)
+            if key in stage_rows and stage_rows[key] != fields:
                 ambiguous = True
-            by_request[request_id][key] = value
+                conflicts.append(f"{request_id}: conflicting repeated stage {stage}")
+            stage_rows[key] = fields
+        for column, fields in table.items():
+            if not column.isdigit():
+                continue
+            for field in ("vllm_ttft_ms", "vllm_tpot_ms"):
+                cell = fields.get(field, "")
+                try:
+                    value = float(cell.replace(",", ""))
+                except ValueError:
+                    continue
+                by_request[request_id][(column, field)] = value
     result = {
         "request_table_count": len(by_request),
         "expected_count": expected_count,
         "assignment": "round log byte interval; requires exclusive service traffic and an unrotated log",
         "request_ids": list(by_request),
+        "identical_duplicate_columns_collapsed": duplicate_columns,
+        "conflicts": conflicts,
     }
     for name, stage, field in (
         ("ttft_ms", "0", "vllm_ttft_ms"),

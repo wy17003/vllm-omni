@@ -16,11 +16,76 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from audit_tokens import audit_tokens  # noqa: E402
 from prepare_schedule import build_schedule  # noqa: E402
 from summarize_metrics import parse_stage_metrics  # noqa: E402
 
 
 class ExperimentTests(unittest.TestCase):
+    def test_duplicate_stage_requires_all_fields_equal_and_stops_at_next_table(self):
+        table = (
+            "[StageRequestStats [request_id=x]]\n| Field | 0 | 1 | 1_2 | 2 |\n"
+            "| num_tokens_out | 1 | 450 | 450 | 0 |\n"
+            "| vllm_ttft_ms | 123 | 40 | 40 | 0 |\n"
+            "| vllm_tpot_ms | 0 | 15 | 15 | 0 |\n"
+        )
+        unrelated = "[OtherStats]\n| Field | Value |\n| num_tokens_out | 99 |\n"
+        result = parse_stage_metrics(table + unrelated, "pd", 1)
+        self.assertEqual(result["ttft_ms"]["mean"], 123)
+        self.assertEqual(result["tpot_ms"]["mean"], 15)
+        self.assertEqual(result["identical_duplicate_columns_collapsed"], 1)
+        conflict = table.replace("450 | 450", "450 | 451")
+        self.assertIsNone(parse_stage_metrics(conflict, "pd", 1)["tpot_ms"]["mean"])
+        self.assertIsNone(parse_stage_metrics(table + conflict, "pd", 1)["ttft_ms"]["mean"])
+        npd = table.replace("| 0 | 1 | 1_2 | 2 |", "| 0 | 0_2 | 1 | 2 |")
+        self.assertIsNone(parse_stage_metrics(npd, "npd", 1)["ttft_ms"]["mean"])
+
+    def test_token_audit_detects_length_and_identity_mismatches_and_missing_logs(self):
+        class Tokenizer:
+            def decode(self, ids, **kwargs):
+                return "system user prompt" if ids == [100] else "same text"
+
+            def encode(self, text, **kwargs):
+                return type("Encoding", (), {"ids": [1, 2]})()
+
+        requests = [dict(row=1, id="sample", body={"prompt": "user prompt"})]
+        prefix = "[HY3_EQ] ar request_id=req prompt_token_ids=[100]\n"
+
+        def logged(ids):
+            return prefix + f'[HY3_EQ] ar request_id=req output_token_ids={ids} ar_generated_text="same text"\n'
+
+        self.assertTrue(audit_tokens(logged([1, 2]), requests, Tokenizer())["valid"])
+        for ids in ([3, 4], [1, 2, 3], [1]):
+            audit = audit_tokens(logged(ids), requests, Tokenizer())
+            self.assertFalse(audit["valid"])
+            self.assertEqual(len(audit["mismatches"]), 1)
+        self.assertFalse(audit_tokens("", requests, Tokenizer())["valid"])
+
+    def test_revision_preserves_reference_pd_and_replaces_only_risky_slots(self):
+        root = ROOT / "schedule_v2"
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        banned = set(manifest["excluded_from_new_runs"])
+        parents = {p["group"]: p for p in manifest["points"] if p["deployment"] == "pd"}
+        for point in manifest["points"]:
+            for index, batch in enumerate(point["batches"]):
+                raw = (root / batch["path"]).read_bytes()
+                self.assertNotIn(b"\r\n", raw)
+                self.assertEqual(hashlib.sha256(raw).hexdigest(), batch["sha256"])
+                rows = [json.loads(line) for line in raw.decode().splitlines()]
+                self.assertEqual(len(rows), point["concurrency"])
+                self.assertEqual(len({r["prompt_sha256"] for r in rows}), len(rows))
+                self.assertEqual(sum(r["language"] == "en" for r in rows), len(rows) // 4)
+                if point["group"] == "mixed":
+                    self.assertEqual(sum(r["group"] == "short" for r in rows), len(rows) // 2)
+                if point["action"] == "reuse_run01":
+                    self.assertEqual(batch["ids"], batch["original_ids"])
+                else:
+                    self.assertFalse(set(batch["ids"]) & banned)
+                if point["deployment"] == "npd":
+                    self.assertLessEqual(set(batch["ids"]), set(parents[point["group"]]["batches"][index]["ids"]))
+                changes = {r["old_id"]: r["new_id"] for r in batch["replacements"]}
+                self.assertEqual(batch["ids"], [changes.get(pid, pid) for pid in batch["original_ids"]])
+
     def test_frozen_inputs_are_reproducible_unique_balanced_and_matched(self):
         committed = json.loads((ROOT / "schedule/manifest.json").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as temporary:

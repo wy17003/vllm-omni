@@ -20,6 +20,7 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
+from audit_tokens import audit_tokens, load_tokenizer, tokenizer_metadata
 from summarize_metrics import parse_stage_metrics, summary
 
 
@@ -191,6 +192,7 @@ def main():
     parser.add_argument("--batch-files", type=Path, nargs="+", help="One frozen catalog JSONL per round")
     parser.add_argument("--deployment", choices=("pd", "npd"), help="Stage mapping for existing AR log metrics")
     parser.add_argument("--server-log", type=Path, help="Local, append-only server log; requires exclusive traffic")
+    parser.add_argument("--tokenizer-json", type=Path, help="Audit logged AR tokens after each batch; fail on mismatch")
     parser.add_argument(
         "--stage-max-num-seqs",
         type=int,
@@ -217,6 +219,9 @@ def main():
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("timeout must be positive")
+    if args.tokenizer_json and not args.server_log and not args.prepare_only:
+        parser.error("--tokenizer-json requires --server-log for execution")
+    tokenizer = load_tokenizer(args.tokenizer_json) if args.tokenizer_json else None
     if args.server_log and (not args.server_log.is_file() or not args.deployment):
         parser.error("server-log must exist and requires --deployment")
     if args.batch_files and len(args.batch_files) != args.rounds:
@@ -269,6 +274,7 @@ def main():
         server_log=str(args.server_log.resolve()) if args.server_log else None,
         unique_prompts_per_round=[len({row["prompt_sha256"] for row in batch}) for batch in batches],
         executed=False,
+        token_audit_tokenizer=tokenizer_metadata(args.tokenizer_json) if args.tokenizer_json else None,
     )
     (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"output directory: {args.output_dir}", flush=True)
@@ -309,6 +315,8 @@ def main():
         ended_at = datetime.now(timezone.utc).isoformat()
         success_count = sum(row["success"] for row in records)
         ar_metrics = None
+        token_audit = None
+        log_text = ""
         if args.server_log:
             log_end = args.server_log.stat()
             if log_end.st_ino != log_start.st_ino or log_end.st_size < log_start.st_size:
@@ -318,21 +326,23 @@ def main():
                     stream.seek(log_start.st_size)
                     log_bytes = stream.read(log_end.st_size - log_start.st_size)
                 (args.output_dir / f"round{round_number}_server.log").write_bytes(log_bytes)
-                ar_metrics = parse_stage_metrics(
-                    log_bytes.decode("utf-8", errors="replace"), args.deployment, len(batch)
-                )
+                log_text = log_bytes.decode("utf-8", errors="replace")
+                ar_metrics = parse_stage_metrics(log_text, args.deployment, len(batch))
                 ar_metrics["log_byte_interval"] = [log_start.st_size, log_end.st_size]
+        if tokenizer is not None:
+            token_audit = audit_tokens(log_text, batch, tokenizer)
         final = dict(
             round=round_number,
             success_count=success_count,
             request_count=len(batch),
             client_wall_s=wall_s,
-            valid=success_count == len(batch),
+            valid=success_count == len(batch) and (token_audit is None or token_audit["valid"]),
             started_at_utc=started_at,
             ended_at_utc=ended_at,
             e2e_s=summary([row["response_latency_s"] for row in records if row["success"]]),
             ar_metrics=ar_metrics,
             records=records,
+            token_audit=token_audit,
         )
         (args.output_dir / f"round{round_number}.json").write_text(
             json.dumps(final, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -342,7 +352,10 @@ def main():
         if not final["valid"]:
             plan.update(execution_status="failed", failed_round=round_number)
             (args.output_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
-            raise SystemExit("Batch failed; inspect saved round data and server logs. No probe result selected.")
+            raise SystemExit(
+                "Batch HTTP/image validation or token audit failed; "
+                "inspect saved round data and logs. No result selected."
+            )
     selected = dict(
         selected_round=args.rounds,
         valid=True,
@@ -350,6 +363,7 @@ def main():
         client_wall_s=final["client_wall_s"],
         e2e_s=final["e2e_s"],
         ar_metrics=final["ar_metrics"],
+        token_audit=final["token_audit"],
         note=(
             "E2E is per-request curl latency including response write, excluding PNG validation. "
             "AR metrics are stage-local."
