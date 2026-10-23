@@ -1196,6 +1196,7 @@ class HunyuanImage3Pipeline(
         device=None,
         max_new_tokens=None,
         prepared_layout: HunyuanPreparedLayout | None = None,
+        ar_token_ids: list[list[int] | None] | None = None,
         **kwargs,
     ):
         # 1. Sanity check
@@ -1301,6 +1302,7 @@ class HunyuanImage3Pipeline(
                 batch_cond_image_info=batch_cond_image_info,
                 batch_system_prompt=batch_system_prompt,
                 batch_cot_text=batch_cot_text,
+                batch_ar_token_ids=ar_token_ids,
                 max_length=kwargs.get("max_length"),
                 bot_task=bot_task,
                 image_base_size=self.config.image_base_size,
@@ -1961,6 +1963,16 @@ class HunyuanImage3Pipeline(
 
         Truncates to positive_reuse_len and sets image_kv_cache_map directly.
         """
+        # Validate before mutating any layer: slicing a short tensor would
+        # silently leave fewer cached positions than the input truncation.
+        cache_len = next(iter(ar_kv_data.values()))["key"].shape[0]
+        for layer_idx, kv in ar_kv_data.items():
+            k_len, v_len = kv["key"].shape[0], kv["value"].shape[0]
+            if k_len != v_len or k_len != cache_len or k_len < positive_reuse_len:
+                raise ValueError(
+                    f"AR KV does not cover the reusable prefix: layer={layer_idx}, "
+                    f"key_len={k_len}, value_len={v_len}, reuse_len={positive_reuse_len}"
+                )
         for layer in self.model.layers:
             layer_idx = layer.layer_idx
             if layer_idx not in ar_kv_data:
@@ -1971,25 +1983,7 @@ class HunyuanImage3Pipeline(
             cache_mgr._injected_ar_kv = [(k[:positive_reuse_len], v[:positive_reuse_len])]
 
     def _extract_ar_kv_from_request(self, req) -> dict[str, Any]:
-        kv = getattr(getattr(req, "sampling_params", None), "past_key_values", None)
-        if kv is None:
-            return {}
-        key_cache = getattr(kv, "key_cache", None)
-        value_cache = getattr(kv, "value_cache", None)
-        if not key_cache or not value_cache:
-            return {}
-        ar_kv_data = {
-            i: {"key": k, "value": v}
-            for i, (k, v) in enumerate(zip(key_cache, value_cache))
-            if k is not None and v is not None
-        }
-        if not ar_kv_data:
-            return {}
-        logger.info(
-            f"[AR KV Reuse] Extracted {len(ar_kv_data)} layers of AR KV, "
-            f"each with length: {next(iter(ar_kv_data.values()))['key'].shape}"
-        )
-        return {"ar_kv_data": ar_kv_data}
+        return self._extract_ar_kv_from_sampling(getattr(req, "sampling_params", None))
 
     def _extract_ar_kv_from_sampling(self, sampling: Any) -> dict[str, Any]:
         kv = getattr(sampling, "past_key_values", None)
@@ -2004,6 +1998,11 @@ class HunyuanImage3Pipeline(
             for i, (k, v) in enumerate(zip(key_cache, value_cache))
             if k is not None and v is not None
         }
+        seq_len = (getattr(sampling, "kv_metadata", None) or {}).get("seq_len")
+        if seq_len is not None and any(
+            kv["key"].shape[0] != seq_len or kv["value"].shape[0] != seq_len for kv in ar_kv_data.values()
+        ):
+            raise ValueError(f"AR KV tensor lengths disagree with transferred seq_len={seq_len}")
         return {"ar_kv_data": ar_kv_data} if ar_kv_data else {}
 
     def prepare_encode(
@@ -2046,6 +2045,7 @@ class HunyuanImage3Pipeline(
         ar_kv_kwargs = self._extract_ar_kv_from_sampling(sampling)
         model_kwargs = self.prepare_model_inputs(
             prompt=prompt,
+            ar_token_ids=request_layout_utils.extract_hunyuan_ar_token_ids([state.prompt]),
             cot_text=cot_text,
             system_prompt=system_prompt,
             mode="gen_image",
@@ -2479,6 +2479,7 @@ class HunyuanImage3Pipeline(
 
         model_inputs = self.prepare_model_inputs(
             prompt=prompt,
+            ar_token_ids=request_layout_utils.extract_hunyuan_ar_token_ids(req.prompts),
             cot_text=cot_text,
             system_prompt=system_prompt,
             mode="gen_image",

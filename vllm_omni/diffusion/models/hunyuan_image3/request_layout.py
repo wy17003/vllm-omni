@@ -16,6 +16,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 from .hunyuan_image3_tokenizer import TokenizerEncodeOutput
 from .hunyuan_image3_transformer import ImageInfo, JointImageInfo
+from .prompt_utils import HUNYUAN_IMAGE3_SPECIAL_TOKEN_IDS
 from .system_prompt import get_system_prompt
 
 if TYPE_CHECKING:
@@ -131,6 +132,26 @@ def normalize_hunyuan_cot_text(cot: str | None) -> str | None:
     if "</recaption>" in cot and not cot.startswith("<recaption>"):
         return "<recaption>" + cot
     return cot
+
+
+def extract_hunyuan_ar_token_ids(prompts: list[str | dict]) -> list[list[int] | None]:
+    """Preserve completed think sequences; other AR tasks keep their template path."""
+    sequences = []
+    for prompt in prompts:
+        extra = prompt.get("extra", {}) if isinstance(prompt, dict) else {}
+        prompt_ids = extra.get("ar_prompt_token_ids")
+        generated_ids = extra.get("ar_token_ids")
+        if (
+            prompt_ids
+            and generated_ids
+            and extra.get("ar_finish_reason") == "stop"
+            and prompt_ids[-1] == HUNYUAN_IMAGE3_SPECIAL_TOKEN_IDS["<think>"]
+            and generated_ids[-1] == HUNYUAN_IMAGE3_SPECIAL_TOKEN_IDS["</think>"]
+        ):
+            sequences.append(prompt_ids + generated_ids)
+        else:
+            sequences.append(None)
+    return sequences
 
 
 def extract_hunyuan_prompt_inputs(
@@ -294,6 +315,7 @@ def prepare_hunyuan_layout(
         batch_cond_image_info=batch_cond_image_info,
         batch_system_prompt=[system_prompt],
         batch_cot_text=cot_text,
+        batch_ar_token_ids=extract_hunyuan_ar_token_ids([request.prompt]),
         max_length=None,
         bot_task=tokenizer_bot_task,
         image_base_size=image_base_size,

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Stage input processor for HunyuanImage3: AR to Diffusion transition.
 
 In IT2I (image editing) mode:
@@ -189,6 +189,16 @@ def ar2diffusion(
             "ar_generated_text": cot_text_for_dit,
         },
     }
+
+    # Text round trips can change generated token boundaries. Keep the actual
+    # AR sequence so DiT can construct the prefix that produced the imported KV.
+    prompt_token_ids = getattr(ar_output, "prompt_token_ids", None)
+    if prompt_token_ids is not None:
+        diffusion_input["extra"].update(
+            ar_prompt_token_ids=list(prompt_token_ids),
+            ar_token_ids=list(generated_token_ids),
+            ar_finish_reason=getattr(output, "finish_reason", None),
+        )
 
     # Forward use_system_prompt so the DiT can build the same system prefix.
     # Also forward the custom system prompt body when sys_type=custom so

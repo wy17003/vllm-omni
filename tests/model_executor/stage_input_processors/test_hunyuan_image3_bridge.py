@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Unit tests for HunyuanImage3 stage input processor."""
 
 import builtins
@@ -21,11 +21,13 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 def _source_output(token_ids: list[int], text: str = ""):
     return SimpleNamespace(
+        prompt_token_ids=[1, 2, HUNYUAN_IMAGE3_SPECIAL_TOKEN_IDS["<think>"]],
         outputs=[
             SimpleNamespace(
                 token_ids=token_ids,
                 cumulative_token_ids=token_ids,
                 text=text,
+                finish_reason="stop",
             )
         ],
         multimodal_output=None,
@@ -97,7 +99,9 @@ def test_ar2diffusion_applies_ratio_and_truncates_tail_without_tokenizer(monkeyp
     assert result is not None
     assert (result["height"], result["width"]) == (512, 2048)
     assert result["extra"]["ar_generated_text"] == "decoded without special tokens"
-    assert "ar_token_ids" not in result["extra"]
+    assert result["extra"]["ar_token_ids"] == token_ids
+    assert result["extra"]["ar_prompt_token_ids"] == [1, 2, HUNYUAN_IMAGE3_SPECIAL_TOKEN_IDS["<think>"]]
+    assert result["extra"]["ar_finish_reason"] == "stop"
 
 
 def test_ar2diffusion_forwards_custom_system_prompt_body():

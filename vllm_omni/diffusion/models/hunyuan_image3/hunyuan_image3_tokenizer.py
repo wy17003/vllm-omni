@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import random
 import warnings
@@ -960,6 +960,7 @@ class TokenizerWrapper:
             )
 
         conv = Conversation()
+        has_ar_prefix = bool(message_list) and message_list[0]["type"] == "ar_prefix"
         uncond_kwargs = dict(uncond_enabled=uncond_p == 1.0, uncond_p=uncond_p)
 
         def process_successive_message(
@@ -968,7 +969,9 @@ class TokenizerWrapper:
             _sub_sections = []
             while _cur_message_idx < len(message_list) and _message_list[_cur_message_idx]["role"] == role:
                 message = _message_list[_cur_message_idx]
-                if message["type"] == "text":
+                if message["type"] == "ar_prefix":
+                    _sub_sections.append(dict(type="text", tokens=message["content"]))
+                elif message["type"] == "text":
                     text = message["content"]
                     if role == "system":
                         _sub_sections.append(dict(type="text", text=text))
@@ -1000,7 +1003,8 @@ class TokenizerWrapper:
                 _cur_message_idx += 1
             if len(_sub_sections) > 0:
                 # Add role prefix and suffix
-                _sub_sections.insert(0, dict(type="text", text=prefix))
+                if not has_ar_prefix:
+                    _sub_sections.insert(0, dict(type="text", text=prefix))
                 _sub_sections.append(dict(type="text", text=suffix))
             return _sub_sections, _cur_message_idx
 
@@ -1084,6 +1088,7 @@ class TokenizerWrapper:
             use_text_mask=False,
             add_eos=False,
             add_pad=False,
+            add_bos=not has_ar_prefix,
         )
 
         if max_length is not None:
@@ -1111,6 +1116,7 @@ class TokenizerWrapper:
         cfg_factor: int = 1,
         add_assistant_prefix: bool | None = None,
         drop_think: bool = False,
+        batch_ar_token_ids: list[list[int] | None] | None = None,
     ) -> dict[str, Any]:
         assert bot_task in ["image", "auto", "think", "recaption", "img_ratio"], (
             f"bot_task should be one of ['image', 'auto', 'think', 'recaption', 'img_ratio'], but got {bot_task}."
@@ -1119,6 +1125,8 @@ class TokenizerWrapper:
         if batch_message_list is None:
             # Simple text-to-image or text-cot-to-image task
             batch_size = len(batch_prompt)
+            if batch_ar_token_ids is not None and len(batch_ar_token_ids) != batch_size:
+                raise ValueError("batch_ar_token_ids must have one entry per prompt")
 
             # Batchify inputs
             if not isinstance(batch_system_prompt, list):
@@ -1146,12 +1154,13 @@ class TokenizerWrapper:
 
             # Convert single round materials into standard message list
             batch_message_list = []
-            for prompt, system_prompt, cot_text, gen_image_info, cond_image_info_list in zip(
+            for prompt, system_prompt, cot_text, gen_image_info, cond_image_info_list, ar_token_ids in zip(
                 batch_prompt,
                 batch_system_prompt,
                 batch_cot_text,
                 batch_gen_image_info,
                 batch_cond_image_info,
+                batch_ar_token_ids if batch_ar_token_ids is not None else [None] * batch_size,
             ):
                 message_list = []
                 # 1. system prompt section
@@ -1171,6 +1180,16 @@ class TokenizerWrapper:
                 # 3. assistant answer sections
                 if cot_text is not None:
                     message_list.append(dict(role="assistant", type="text", content=cot_text, context_type="str"))
+                if (
+                    ar_token_ids is not None
+                    and mode == "gen_image"
+                    and cfg_factor == 1
+                    and not cond_image_info_list
+                    and not drop_think
+                ):
+                    # Includes BOS and the terminal </think>. The existing KV
+                    # boundary leaves that final token in the uncached suffix.
+                    message_list = [dict(role="assistant", type="ar_prefix", content=ar_token_ids)]
                 if mode == "gen_image":
                     message_list.append(
                         dict(role="assistant", type="gen_image", content=gen_image_info, context_type="image_info")
