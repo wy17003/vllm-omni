@@ -1,0 +1,146 @@
+--- a/vllm_omni/diffusion/models/hunyuan_image3/pipeline_hunyuan_image3.py
++++ b/vllm_omni/diffusion/models/hunyuan_image3/pipeline_hunyuan_image3.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
+ import copy
++import json
+ import logging
+ from collections.abc import Iterable
+ from typing import TYPE_CHECKING, Any, ClassVar
+@@ -2496,6 +2497,50 @@
+
+         model_inputs.update(ar_kv_kwargs)
+
++        # Temporary GPU acceptance probe: one T2I request, CFG off, legacy KV.
++        if not OmniDiffusionRequest.is_dummy_run_request_id(req.request_id):
++            extra = req.prompts[0]["extra"]
++            prompt_ids, generated_ids = extra["ar_prompt_token_ids"], extra["ar_token_ids"]
++            raw_ids = prompt_ids + generated_ids
++            dit_ids = model_inputs["input_ids"][0].tolist()
++            reuse_len = model_inputs["tokenizer_output"].think_recaption_end_pos[0][0]
++            cache = ar_kv_kwargs["ar_kv_data"]
++            roundtrip_ids = self._tkwrapper.encode(
++                self._tkwrapper.decode(generated_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False),
++                add_special_tokens=False,
++            )
++            assert extra["ar_finish_reason"] == "stop"
++            assert guidance_scale == 0.0 and image_size == (1024, 1024)
++            assert dit_ids[: len(raw_ids)] == raw_ids
++            assert reuse_len == len(raw_ids) - 1 > 0
++            assert dit_ids[reuse_len] == generated_ids[-1] == self._tkwrapper.end_think_token_id == 128024
++            assert set(cache) == {layer.layer_idx for layer in self.model.layers}
++            assert all(kv["key"].shape[0] == kv["value"].shape[0] >= reuse_len for kv in cache.values())
++            print(
++                "HY3_GPU_ACCEPT "
++                + json.dumps(
++                    dict(
++                        event="layout",
++                        request_id=req.request_id,
++                        rank=torch.distributed.get_rank(),
++                        prompt_len=len(prompt_ids),
++                        generated_len=len(generated_ids),
++                        reencoded_len=len(roundtrip_ids),
++                        roundtrip_equal=generated_ids == roundtrip_ids,
++                        prefix_equal=True,
++                        reuse_len=reuse_len,
++                        full_len=len(dit_ids),
++                        end_think_id=dit_ids[reuse_len],
++                        kv_min_len=min(kv["key"].shape[0] for kv in cache.values()),
++                        layers=len(cache),
++                    )
++                ),
++                flush=True,
++            )
++            self.pipeline._gpu_acceptance_id = req.request_id
++            for layer in self.model.layers:
++                layer.self_attn.image_attn._gpu_acceptance = (req.request_id, layer.layer_idx, reuse_len)
++
+         outputs = self._generate(**model_inputs, **kwargs)
+         image = outputs[0]
+         metadata = {}
+--- a/vllm_omni/diffusion/models/hunyuan_image3/hunyuan_image3_transformer.py
++++ b/vllm_omni/diffusion/models/hunyuan_image3/hunyuan_image3_transformer.py
+@@ -2,6 +2,7 @@
+ # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
+ import inspect
++import json
+ import logging
+ from collections.abc import Callable, Iterable
+ from dataclasses import dataclass
+@@ -982,6 +983,28 @@
+                 new_values.append(v)
+             key = torch.cat(new_keys, dim=0)
+             value = torch.cat(new_values, dim=0)
++
++        if hasattr(self, "_gpu_acceptance"):
++            request_id, layer_idx, expected_reuse_len = self._gpu_acceptance
++            assert ar_kv_len == expected_reuse_len > 0
++            assert key.shape[1] == value.shape[1] == seq_len
++            print(
++                "HY3_GPU_ACCEPT "
++                + json.dumps(
++                    dict(
++                        event="consume",
++                        request_id=request_id,
++                        rank=torch.distributed.get_rank(),
++                        layer=layer_idx,
++                        reuse_len=ar_kv_len,
++                        query_len=q_len,
++                        full_len=seq_len,
++                        key_len=key.shape[1],
++                        value_len=value.shape[1],
++                    )
++                ),
++                flush=True,
++            )
+
+         cached_prompt_lens = self._get_current_starts(gen_timestep_scatter_index, ar_kv_len)
+         assert torch.all(cached_prompt_lens <= key.shape[1]), (
+@@ -3262,6 +3285,23 @@
+             input_ids, model_kwargs, batch_size, cfg_parallel_ready, cfg_rank, device
+         )
+
++        if hasattr(self, "_gpu_acceptance_id"):
++            assert ar_kv_reuse_len > 0 and input_ids[0, 0].item() == 128024
++            print(
++                "HY3_GPU_ACCEPT "
++                + json.dumps(
++                    dict(
++                        event="truncate",
++                        request_id=self._gpu_acceptance_id,
++                        rank=torch.distributed.get_rank(),
++                        reuse_len=ar_kv_reuse_len,
++                        query_len=input_ids.shape[1],
++                        first_uncached_id=input_ids[0, 0].item(),
++                    )
++                ),
++                flush=True,
++            )
++
+         # Store ar_kv_reuse_len in model_kwargs for use in forward method (SP mode)
+         model_kwargs["ar_kv_reuse_len"] = ar_kv_reuse_len
+
+@@ -3384,6 +3424,21 @@
+                 if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
+                     progress_bar.update()
+
++        if hasattr(self, "_gpu_acceptance_id"):
++            assert i + 1 == num_inference_steps == 50
++            print(
++                "HY3_GPU_ACCEPT "
++                + json.dumps(
++                    dict(
++                        event="denoise_done",
++                        request_id=self._gpu_acceptance_id,
++                        rank=torch.distributed.get_rank(),
++                        steps=i + 1,
++                    )
++                ),
++                flush=True,
++            )
++
+         set_forward_context_denoise_step_idx(None)
+
+         if hasattr(self.vae.config, "scaling_factor") and self.vae.config.scaling_factor:

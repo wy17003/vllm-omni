@@ -46,6 +46,10 @@ these numbers are not a reproduction of its original concurrent workload.
 
 ## Remaining acceptance plan
 
+The executable GPU procedure, original launch command/request, temporary probe,
+and evidence checks are in [GPU acceptance](GPU_ACCEPTANCE.md). CPU regression
+has passed; GPU acceptance remains pending until that procedure is run.
+
 1. **Retain the CPU regressions.** Keep the length-changing, equal-length but
    different-ID, and stable-encoding cases, including suffix and KV-boundary
    checks. The original PD/NPD samples serve as token regression data; reproducing
